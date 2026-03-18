@@ -1,0 +1,506 @@
+/* ASTDebugPanel.css - AST 调试面板样式 */
+
+.ast-debug-panel {
+  background: #ffffff;
+  border-radius: 12px;
+  margin: 16px 0;
+  overflow: hidden;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+  border: 1px solid #cccccc;
+}
+
+.debug-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  background: linear-gradient(135deg, #f5f5f5 0%, #e8e8e8 100%);
+  border-bottom: 1px solid #cccccc;
+}
+
+.debug-header h2 {
+  margin: 0;
+  font-size: 16px;
+  color: #333333;
+  font-weight: 600;
+}
+
+.debug-tabs {
+  display: flex;
+  gap: 8px;
+}
+
+.tab-btn {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 6px;
+  background: #e0e0e0;
+  color: #666666;
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.2s ease;
+}
+
+.tab-btn:hover {
+  background: #d0d0d0;
+  color: #333333;
+}
+
+.tab-btn.active {
+  background: #3b82f6;
+  color: #ffffff;
+  font-weight: 500;
+}
+
+.close-btn {
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 6px;
+  background: #e0e0e0;
+  color: #666666;
+  cursor: pointer;
+  font-size: 16px;
+  transition: all 0.2s ease;
+}
+
+.close-btn:hover {
+  background: #ef4444;
+  color: #ffffff;
+}
+
+.debug-content {
+  padding: 20px;
+  max-height: 600px;
+  overflow-y: auto;
+  background: #ffffff;
+}
+
+/* 步骤列表样式 */
+.debug-steps {
+  color: #333333;
+}
+
+.steps-header {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.steps-count {
+  color: #3b82f6;
+  font-weight: 500;
+}
+
+.steps-duration {
+  color: #22c55e;
+  font-weight: 500;
+}
+
+.steps-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.step-item {
+  background: #f5f5f5;
+  border-radius: 8px;
+  overflow: hidden;
+  transition: all 0.2s ease;
+  border: 1px solid #e0e0e0;
+}
+
+.step-item:hover {
+  background: #eeeeee;
+}
+
+.step-header {
+  display: flex;
+  align-items: center;
+  padding: 12px 16px;
+  cursor: pointer;
+  gap: 12px;
+}
+
+.step-number {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #e0e0e0;
+  border-radius: 50%;
+  font-size: 12px;
+  font-weight: 600;
+  color: #3b82f6;
+}
+
+.step-title {
+  flex: 1;
+  font-weight: 500;
+  color: #333333;
+}
+
+.step-duration {
+  font-size: 12px;
+  color: #22c55e;
+  font-family: 'Monaco', monospace;
+}
+
+.step-toggle {
+  color: #999999;
+  font-size: 10px;
+}
+
+.step-content {
+  padding: 0 16px 16px 56px;
+  animation: slideDown 0.2s ease;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.step-description {
+  color: #666666;
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+
+.step-data {
+  background: #f9f9f9;
+  border-radius: 6px;
+  padding: 12px;
+  font-family: 'Monaco', 'Consolas', monospace;
+  font-size: 12px;
+  overflow-x: auto;
+  border: 1px solid #e0e0e0;
+}
+
+.data-label {
+  color: #999999;
+  margin-bottom: 8px;
+  font-weight: 500;
+}
+
+.data-null {
+  color: #ef4444;
+}
+
+.data-boolean {
+  color: #f97316;
+}
+
+.data-number {
+  color: #22c55e;
+}
+
+.data-string {
+  color: #ca8a04;
+}
+
+.data-key {
+  color: #3b82f6;
+}
+
+.data-array-item,
+.data-object-entry {
+  margin: 4px 0;
+}
+
+.data-more {
+  color: #999999;
+  font-style: italic;
+}
+
+/* AST 节点对比样式 */
+.ast-comparison {
+  color: #333333;
+}
+
+.ast-stats {
+  display: flex;
+  gap: 24px;
+  margin-bottom: 20px;
+  padding: 16px;
+  background: #f5f5f5;
+  border-radius: 8px;
+  border: 1px solid #e0e0e0;
+}
+
+.ast-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.stat-label {
+  font-size: 12px;
+  color: #666666;
+}
+
+.stat-value {
+  font-size: 24px;
+  font-weight: 700;
+  color: #3b82f6;
+}
+
+.ast-trees {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.ast-tree {
+  background: #f5f5f5;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #e0e0e0;
+}
+
+.tree-title {
+  padding: 12px 16px;
+  background: #e8e8e8;
+  font-weight: 500;
+  font-size: 13px;
+  color: #333333;
+}
+
+.old-tree .tree-title {
+  border-left: 3px solid #ef4444;
+}
+
+.new-tree .tree-title {
+  border-left: 3px solid #22c55e;
+}
+
+.tree-content {
+  padding: 12px;
+  max-height: 300px;
+  overflow-y: auto;
+  font-family: 'Monaco', 'Consolas', monospace;
+  font-size: 11px;
+  background: #ffffff;
+}
+
+.ast-node {
+  display: flex;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.ast-node:hover {
+  background: #f0f0f0;
+}
+
+.ast-node.selected {
+  background: rgba(59, 130, 246, 0.15);
+}
+
+.ast-node.matched .node-type {
+  color: #22c55e;
+}
+
+.ast-node.unmatched .node-type {
+  color: #ef4444;
+}
+
+.node-index {
+  color: #999999;
+  min-width: 30px;
+}
+
+.node-type {
+  flex: 1;
+  color: #333333;
+}
+
+.tree-more {
+  padding: 8px;
+  text-align: center;
+  color: #999999;
+  font-style: italic;
+}
+
+.ast-legend {
+  display: flex;
+  gap: 24px;
+  justify-content: center;
+  padding: 12px;
+  background: #f5f5f5;
+  border-radius: 8px;
+  border: 1px solid #e0e0e0;
+}
+
+.legend-item {
+  font-size: 12px;
+}
+
+.legend-item.matched {
+  color: #22c55e;
+}
+
+.legend-item.unmatched {
+  color: #ef4444;
+}
+
+/* LCS 分析样式 */
+.lcs-analysis {
+  color: #333333;
+}
+
+.lcs-summary {
+  margin-bottom: 24px;
+}
+
+.lcs-summary h3 {
+  margin: 0 0 12px;
+  color: #3b82f6;
+  font-size: 16px;
+}
+
+.lcs-description {
+  color: #666666;
+  font-size: 13px;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.lcs-type-stats {
+  margin-bottom: 24px;
+}
+
+.lcs-type-stats h4 {
+  margin: 0 0 12px;
+  font-size: 14px;
+  color: #333333;
+}
+
+.type-stats-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.type-stat-item {
+  display: grid;
+  grid-template-columns: 180px 60px 1fr;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  background: #f5f5f5;
+  border-radius: 6px;
+  border: 1px solid #e0e0e0;
+}
+
+.type-name {
+  font-family: 'Monaco', monospace;
+  font-size: 12px;
+  color: #3b82f6;
+}
+
+.type-count {
+  font-weight: 600;
+  color: #22c55e;
+  text-align: right;
+}
+
+.type-bar {
+  height: 8px;
+  background: linear-gradient(90deg, #3b82f6, #8b5cf6);
+  border-radius: 4px;
+  min-width: 4px;
+}
+
+.lcs-pairs h4 {
+  margin: 0 0 12px;
+  font-size: 14px;
+  color: #333333;
+}
+
+.pairs-table {
+  background: #f5f5f5;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #e0e0e0;
+}
+
+.pairs-header {
+  display: grid;
+  grid-template-columns: 100px 100px 1fr;
+  padding: 12px 16px;
+  background: #e8e8e8;
+  font-weight: 500;
+  font-size: 12px;
+  color: #666666;
+}
+
+.pair-row {
+  display: grid;
+  grid-template-columns: 100px 100px 1fr;
+  padding: 8px 16px;
+  border-bottom: 1px solid #e0e0e0;
+  font-family: 'Monaco', monospace;
+  font-size: 12px;
+  background: #ffffff;
+}
+
+.pair-row:last-child {
+  border-bottom: none;
+}
+
+.pair-old {
+  color: #ef4444;
+}
+
+.pair-new {
+  color: #22c55e;
+}
+
+.pair-type {
+  color: #3b82f6;
+}
+
+.pairs-more {
+  padding: 12px;
+  text-align: center;
+  color: #999999;
+  font-style: italic;
+  background: #ffffff;
+}
+
+/* 滚动条样式 */
+.debug-content::-webkit-scrollbar,
+.tree-content::-webkit-scrollbar {
+  width: 8px;
+}
+
+.debug-content::-webkit-scrollbar-track,
+.tree-content::-webkit-scrollbar-track {
+  background: #f5f5f5;
+}
+
+.debug-content::-webkit-scrollbar-thumb,
+.tree-content::-webkit-scrollbar-thumb {
+  background: #cccccc;
+  border-radius: 4px;
+}
+
+.debug-content::-webkit-scrollbar-thumb:hover,
+.tree-content::-webkit-scrollbar-thumb:hover {
+  background: #aaaaaa;
+}

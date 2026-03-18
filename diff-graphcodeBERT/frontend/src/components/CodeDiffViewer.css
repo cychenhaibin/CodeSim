@@ -1,0 +1,698 @@
+/* components/CodeDiffViewer.css */
+/* 样式与 diff-ast 保持一致 */
+
+.code-diff-viewer {
+  width: 100%;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background-color: #ffffff;
+  color: #333333;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  font-size: 13px;
+}
+
+/* 头部 */
+.diff-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 20px;
+  background-color: #f5f5f5;
+  border-bottom: 1px solid #cccccc;
+}
+
+.diff-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: #333333;
+}
+
+.header-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.toggle-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #666;
+  cursor: pointer;
+}
+
+.toggle-option input {
+  cursor: pointer;
+}
+
+/* 文件信息 */
+.diff-info {
+  padding: 10px 20px;
+  background-color: #f5f5f5;
+  border-bottom: 1px solid #cccccc;
+}
+
+.file-info {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  color: #333333;
+  font-size: 12px;
+}
+
+.file-info .label {
+  color: #666666;
+}
+
+.file-path {
+  color: #0066cc;
+}
+
+.vs {
+  color: #999;
+}
+
+.stats {
+  color: #666666;
+}
+
+.ast-structure-row {
+  margin-top: 6px;
+}
+
+.ast-similarity-value {
+  color: #0066cc;
+  font-weight: 600;
+}
+
+.ast-hint {
+  color: #666666;
+  font-size: 11px;
+  margin-left: 8px;
+}
+
+/* AST 向量编码相似度（核心） */
+.ast-vector-row {
+  margin-top: 8px;
+  padding: 8px 12px;
+  background-color: #e3f2fd;
+  border-radius: 6px;
+  border: 1px solid #90caf9;
+}
+
+.ast-vector-value {
+  font-weight: 700;
+  font-size: 16px;
+  margin-left: 4px;
+}
+
+.ast-vector-value.high {
+  color: #2e7d32;
+}
+
+.ast-vector-value.medium {
+  color: #f57c00;
+}
+
+.ast-vector-value.low {
+  color: #c62828;
+}
+
+.ast-interpretation {
+  color: #5e35b1;
+  font-size: 12px;
+  margin-left: 8px;
+  font-weight: 500;
+}
+
+/* GraphCodeBERT 相似度（参考） */
+.model-similarity-row {
+  margin-top: 6px;
+}
+
+.model-similarity-value {
+  color: #9c27b0;
+  font-weight: 600;
+}
+
+.model-interpretation {
+  color: #666666;
+  font-size: 11px;
+  margin-left: 8px;
+}
+
+/* 可折叠内容区域 */
+.collapsible-content {
+  overflow: hidden;
+  border-bottom: 1px solid #cccccc;
+  transition: max-height 0.3s ease-out, opacity 0.25s ease-out;
+}
+
+.collapsible-content.expanded {
+  max-height: 350px;
+  opacity: 1;
+  overflow-y: auto;
+}
+
+.collapsible-content.collapsed {
+  max-height: 0;
+  opacity: 0;
+  border-bottom: none;
+}
+
+/* 折叠按钮 */
+.collapse-bar-wrapper {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 0;
+  background-color: #f5f5f5;
+  border-bottom: 1px solid #cccccc;
+}
+
+.collapse-bar-btn {
+  font-size: 12px;
+  color: #666666;
+}
+
+/* 差异详情 */
+.diff-details {
+  padding: 12px 20px;
+  background-color: #f9f9f9;
+}
+
+.diff-details + .diff-details {
+  border-top: 1px solid #e0e0e0;
+}
+
+.details-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #333333;
+  margin-bottom: 10px;
+}
+
+/* 差异列表 */
+.changes-list {
+  margin: 0;
+  padding-left: 24px;
+  list-style-position: outside;
+}
+
+.changes-list .change-item {
+  font-size: 12px;
+  line-height: 1.6;
+  margin-bottom: 4px;
+}
+
+.changes-list .change-item {
+  display: flex;
+  align-items: center;
+}
+
+.changes-list .change-description {
+  color: #333;
+}
+
+/* 语义统计网格 */
+.semantic-stats-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  margin-bottom: 10px;
+}
+
+.semantic-stats-grid .stat-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.semantic-stats-grid .stat-label {
+  color: #666;
+}
+
+.semantic-stats-grid .stat-value {
+  font-weight: 600;
+  color: #333;
+}
+
+.semantic-stats-grid .stat-value.removed {
+  color: #cc3300;
+}
+
+.semantic-stats-grid .stat-value.added {
+  color: #009966;
+}
+
+.semantic-stats-grid .stat-value.different {
+  color: #cc9900;
+}
+
+.semantic-stats-grid .stat-hint {
+  color: #999;
+  font-size: 11px;
+}
+
+.interpretation {
+  margin-top: 10px;
+  padding: 10px;
+  background-color: #e8f4fd;
+  border-left: 3px solid #0066cc;
+  font-size: 12px;
+  color: #333;
+  line-height: 1.5;
+}
+
+/* 图例条 */
+.legend-bar {
+  display: flex;
+  gap: 20px;
+  padding: 8px 20px;
+  background-color: #f5f5f5;
+  border-bottom: 1px solid #cccccc;
+  font-size: 11px;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #666;
+}
+
+.legend-color {
+  width: 14px;
+  height: 14px;
+  border: 1px solid #ccc;
+}
+
+.legend-color.normal {
+  background-color: #ffffff;
+}
+
+.legend-color.equivalent {
+  background-color: rgba(100, 149, 237, 0.2);
+}
+
+.legend-color.different {
+  background-color: rgba(255, 193, 7, 0.3);
+}
+
+.legend-color.removed {
+  background-color: rgba(244, 67, 54, 0.15);
+}
+
+.legend-color.added {
+  background-color: rgba(76, 175, 80, 0.15);
+}
+
+/* 代码对比容器 */
+.diff-container {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  overflow: hidden;
+}
+
+.diff-pane {
+  overflow-y: auto;
+  overflow-x: auto;
+  background-color: #ffffff;
+}
+
+.left-pane {
+  border-right: 1px solid #cccccc;
+}
+
+.pane-content {
+  min-width: max-content;
+}
+
+/* 代码行 */
+.code-line {
+  display: flex;
+  align-items: stretch;
+  min-height: 20px;
+  line-height: 20px;
+}
+
+.code-line.normal {
+  background-color: #ffffff;
+}
+
+.code-line.added {
+  background-color: rgba(76, 175, 80, 0.15);
+}
+
+.code-line.removed {
+  background-color: rgba(244, 67, 54, 0.15);
+}
+
+.code-line.empty {
+  background-color: #f9f9f9;
+}
+
+.code-line.equivalent {
+  background-color: rgba(100, 149, 237, 0.15);
+}
+
+.code-line.different {
+  background-color: rgba(255, 193, 7, 0.15);
+}
+
+.line-number {
+  display: inline-block;
+  width: 50px;
+  padding: 0 8px;
+  text-align: right;
+  color: #999999;
+  background-color: #f5f5f5;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.line-marker {
+  display: inline-block;
+  width: 20px;
+  text-align: center;
+  color: #333333;
+  font-weight: bold;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.code-line.added .line-marker {
+  color: #4caf50;
+}
+
+.code-line.removed .line-marker {
+  color: #f44336;
+}
+
+.code-line.equivalent .line-marker {
+  color: #6495ed;
+}
+
+.code-line.different .line-marker {
+  color: #ffc107;
+}
+
+.line-content {
+  flex: 1;
+  margin: 0;
+  padding: 0 12px;
+  white-space: pre;
+  overflow-x: visible;
+  font-family: inherit;
+  font-size: inherit;
+  color: #333333;
+}
+
+.code-line.added .line-content {
+  background-color: rgba(76, 175, 80, 0.2);
+}
+
+.code-line.removed .line-content {
+  background-color: rgba(244, 67, 54, 0.2);
+}
+
+.code-line.equivalent .line-content {
+  background-color: rgba(100, 149, 237, 0.1);
+}
+
+.code-line.different .line-content {
+  background-color: rgba(255, 193, 7, 0.2);
+}
+
+/* 滚动条样式 */
+.diff-pane::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.diff-pane::-webkit-scrollbar-track {
+  background: #f5f5f5;
+}
+
+.diff-pane::-webkit-scrollbar-thumb {
+  background: #cccccc;
+  border-radius: 5px;
+}
+
+.diff-pane::-webkit-scrollbar-thumb:hover {
+  background: #aaaaaa;
+}
+
+/* 加载状态 */
+.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  background-color: #ffffff;
+  color: #333333;
+  font-size: 16px;
+}
+
+/* ===================== 计算详情按钮 ===================== */
+.detail-btn {
+  margin-left: 10px;
+}
+
+/* ===================== Drawer 内 Steps 布局修正 ===================== */
+
+/* Drawer body 去掉默认的底部 padding */
+.detail-drawer .ant-drawer-body {
+  padding-bottom: 16px !important;
+}
+
+/* ===================== 横向步骤条 + 内容区域 ===================== */
+.drawer-detail-panel {
+  padding: 0;
+}
+
+.drawer-h-steps {
+  margin-bottom: 20px;
+}
+
+.drawer-h-steps .ant-steps-item {
+  cursor: pointer;
+}
+
+.drawer-step-content {
+  padding: 16px 20px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+}
+
+.step-section-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1e293b;
+  margin-bottom: 8px;
+}
+
+.step-desc-block {
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.step-desc-block p {
+  margin: 4px 0;
+}
+
+.step-formula {
+  margin: 8px 0;
+  padding: 8px 12px;
+  background: #f1f5f9;
+  border-left: 3px solid #1a73e8;
+  border-radius: 0 6px 6px 0;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 13px;
+  color: #1e293b;
+  letter-spacing: 0.3px;
+}
+
+.step-data, .step-data-note {
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #334155;
+}
+
+.step-data strong {
+  color: #1a73e8;
+  font-size: 14px;
+}
+
+.step-vector-table {
+  margin-top: 10px;
+}
+
+.step-vector-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.step-vector-table th,
+.step-vector-table td {
+  padding: 6px 10px;
+  border: 1px solid #e2e8f0;
+  text-align: center;
+}
+
+.step-vector-table th {
+  background: #f1f5f9;
+  color: #475569;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.step-vector-table td:first-child {
+  text-align: left;
+  background: #f8fafc;
+}
+
+.vector-note {
+  margin: 6px 0 0 0;
+  font-size: 11.5px;
+  color: #94a3b8;
+}
+
+.step-data-note {
+  margin: 12px 0 0 0;
+  padding: 12px 14px;
+  background: #f1f5f9;
+  border: 1px dashed #cbd5e1;
+  border-radius: 6px;
+  font-size: 12.5px;
+  color: #475569;
+  line-height: 1.7;
+}
+
+.step-data-note ul {
+  margin-left: 20px;
+  list-style-type: disc;
+}
+
+.step-data-note strong {
+  color: #1e293b;
+}
+
+.step-data-note p {
+  margin: 4px 0;
+}
+
+.step-data-note code {
+  padding: 1px 4px;
+  background: #e8f0fe;
+  border-radius: 3px;
+  font-size: 12px;
+  color: #1a56db;
+}
+
+.code-example {
+  margin: 6px 0;
+  padding: 8px 10px;
+  background: #1e293b;
+  color: #e2e8f0;
+  border-radius: 5px;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.step-result {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 10px 14px;
+  background: linear-gradient(135deg, #eef3ff 0%, #f0fdf4 100%);
+  border: 1px solid #d4e0f7;
+  border-radius: 8px;
+}
+
+.result-label {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.step-equiv-list {
+  margin: 6px 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: #475569;
+  line-height: 1.8;
+}
+
+.step-equiv-list code {
+  padding: 1px 5px;
+  background: #e8f0fe;
+  border-radius: 3px;
+  font-size: 12px;
+  color: #1a56db;
+}
+
+.drawer-diff-section {
+  margin-top: 16px;
+  padding: 12px 16px;
+  background: #fafbfc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+}
+
+.drawer-diff-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1e293b;
+  margin-bottom: 8px;
+}
+
+.step-list {
+  margin: 8px 0 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.step-list li {
+  padding: 4px 10px;
+  border-radius: 4px;
+  margin-bottom: 3px;
+}
+
+.step-list li.item-added {
+  color: #166534;
+  background: #f0fdf4;
+}
+
+.step-list li.item-removed {
+  color: #991b1b;
+  background: #fef2f2;
+}
+
+.step-list li.item-added::before {
+  content: '+ ';
+  font-weight: 700;
+}
+
+.step-list li.item-removed::before {
+  content: '- ';
+  font-weight: 700;
+}
