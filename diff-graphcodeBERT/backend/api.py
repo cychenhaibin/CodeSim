@@ -171,6 +171,62 @@ class ASTSimilarityRequest(BaseModel):
     sbt2: str  # 第二个 AST 的 SBT 序列化字符串
 
 
+class CodeUnitItem(BaseModel):
+    """代码单元"""
+    name: str
+    type: str
+    code: str
+    lineCount: int
+
+
+class HierarchicalCompareRequest(BaseModel):
+    """函数级分层编码比较请求"""
+    units1: List[CodeUnitItem]
+    units2: List[CodeUnitItem]
+    lang: str = "javascript"
+
+
+class UnitMatchResult(BaseModel):
+    """函数单元匹配结果"""
+    unit_a: str
+    type_a: str
+    lines_a: int
+    unit_b: str
+    type_b: str
+    lines_b: int
+    similarity: float
+    similarity_percent: float
+    weight: float
+
+
+class EncodingDetail(BaseModel):
+    """单个代码单元的编码详情"""
+    name: str
+    type: str
+    lines: int
+    token_count: int
+    effective_tokens: int
+    truncated: bool
+    vector_norm: float
+    dfg_string: str = ""
+
+
+class HierarchicalCompareResponse(BaseModel):
+    """函数级分层编码比较响应"""
+    similarity: float
+    similarity_percent: float
+    matches: List[UnitMatchResult]
+    unmatched_a: List[str]
+    unmatched_b: List[str]
+    total_weight: float
+    encoding_details_a: List[EncodingDetail]
+    encoding_details_b: List[EncodingDetail]
+    similarity_matrix: List[List[float]]
+    unit_names_a: List[str]
+    unit_names_b: List[str]
+    interpretation: str
+
+
 class VectorDebugInfo(BaseModel):
     """向量编码调试信息"""
     cls_norm: float
@@ -325,6 +381,100 @@ async def compare_ast(request: ASTSimilarityRequest):
             code2_vector=VectorDebugInfo(**result["code2_vector"]),
         )
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/compare-hierarchical", response_model=HierarchicalCompareResponse)
+async def compare_hierarchical(request: HierarchicalCompareRequest):
+    """
+    函数级分层编码比较
+
+    前端将两份代码分别拆分为函数/组件级别的单元，发送到此接口。
+    后端对每个单元单独编码为向量，构建相似度矩阵，使用匈牙利算法做最优匹配，
+    再按代码行数加权计算整体相似度。
+
+    优势：
+    - 每个函数/组件独立编码，不受 512 token 限制
+    - 能看到每个函数的匹配情况（哪个函数跟哪个对应，相似多少）
+    - 新增/删除的函数能被识别出来
+    """
+    try:
+        det = get_detector()
+
+        units1_dicts = [{"name": u.name, "type": u.type, "code": u.code, "lineCount": u.lineCount} for u in request.units1]
+        units2_dicts = [{"name": u.name, "type": u.type, "code": u.code, "lineCount": u.lineCount} for u in request.units2]
+
+        result = det.hierarchical_compare(units1_dicts, units2_dicts, request.lang)
+
+        matches = [UnitMatchResult(**m) for m in result["matches"]]
+
+        return HierarchicalCompareResponse(
+            similarity=result["similarity"],
+            similarity_percent=result["similarity_percent"],
+            matches=matches,
+            unmatched_a=result["unmatched_a"],
+            unmatched_b=result["unmatched_b"],
+            total_weight=result["total_weight"],
+            encoding_details_a=[EncodingDetail(**d) for d in result["encoding_details_a"]],
+            encoding_details_b=[EncodingDetail(**d) for d in result["encoding_details_b"]],
+            similarity_matrix=result["similarity_matrix"],
+            unit_names_a=result["unit_names_a"],
+            unit_names_b=result["unit_names_b"],
+            interpretation=result["interpretation"],
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class TreeSitterSplitRequest(BaseModel):
+    """Tree-sitter 代码拆分请求"""
+    code1: str
+    code2: str
+    lang: str = "javascript"
+
+
+class CodeUnitResponse(BaseModel):
+    """代码单元响应"""
+    name: str
+    type: str
+    code: str
+    startLine: int
+    endLine: int
+    lineCount: int
+
+
+class TreeSitterSplitResponse(BaseModel):
+    """Tree-sitter 拆分响应"""
+    units1: List[CodeUnitResponse]
+    units2: List[CodeUnitResponse]
+
+
+@app.post("/split-with-treesitter", response_model=TreeSitterSplitResponse)
+async def split_with_treesitter(request: TreeSitterSplitRequest):
+    """
+    使用 Tree-sitter 在后端拆分代码
+    
+    优势：
+    - CST 保留所有源代码细节，不丢失任何代码
+    - 节点边界精确，基于语法结构
+    - 支持多种语言
+    """
+    try:
+        from parser.code_splitter import TreeSitterCodeSplitter
+        
+        splitter = TreeSitterCodeSplitter(request.lang)
+        units1 = splitter.split_code(request.code1, max_chars=500)
+        units2 = splitter.split_code(request.code2, max_chars=500)
+        
+        return TreeSitterSplitResponse(
+            units1=[CodeUnitResponse(**u) for u in units1],
+            units2=[CodeUnitResponse(**u) for u in units2]
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 

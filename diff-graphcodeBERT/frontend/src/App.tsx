@@ -1,6 +1,5 @@
 import React, { useState, useMemo } from 'react';
 import { ASTDiffAnalyzer, DiffResult } from './utils/ASTDiffAnalyzer';
-import { serializeToSBT } from './utils/ASTSerializer';
 import CodeDiffViewer from './components/CodeDiffViewer';
 import { Button, Alert, Spin, Upload } from 'antd';
 import { SyncOutlined, UploadOutlined, CodeOutlined, FileOutlined } from '@ant-design/icons';
@@ -12,22 +11,53 @@ interface ModelStatus {
   message: string;
 }
 
-interface ASTSimilarityResponse {
-  similarity: number;
-  similarity_percent: number;
-  interpretation: string;
-  sbt1_tokens: number;
-  sbt2_tokens: number;
+export interface CodeUnit {
+  name: string;
+  type: string;
+  code: string;
+  startLine: number;
+  endLine: number;
+  lineCount: number;
 }
 
-interface ModelSimilarityResponse {
+export interface UnitMatchResult {
+  unit_a: string;
+  type_a: string;
+  lines_a: number;
+  unit_b: string;
+  type_b: string;
+  lines_b: number;
   similarity: number;
   similarity_percent: number;
+  weight: number;
+}
+
+export interface EncodingDetail {
+  name: string;
+  type: string;
+  lines: number;
+  token_count: number;
+  effective_tokens: number;
+  truncated: boolean;
+  vector_norm: number;
+  dfg_string: string;
+}
+
+export interface HierarchicalCompareResponse {
+  similarity: number;
+  similarity_percent: number;
+  matches: UnitMatchResult[];
+  unmatched_a: string[];
+  unmatched_b: string[];
+  total_weight: number;
+  encoding_details_a: EncodingDetail[];
+  encoding_details_b: EncodingDetail[];
+  similarity_matrix: number[][];
+  unit_names_a: string[];
+  unit_names_b: string[];
   interpretation: string;
-  raw_cosine_similarity?: number;
-  text_similarity?: number;
-  code1_analysis?: { token_count: number; dfg_edges: number };
-  code2_analysis?: { token_count: number; dfg_edges: number };
+  units1?: CodeUnit[]; // 后端 Tree-sitter 拆分的单元，方便展示原始代码
+  units2?: CodeUnit[]; // 后端 Tree-sitter 拆分的单元，方便展示原始代码
 }
 
 const App: React.FC = () => {
@@ -36,8 +66,7 @@ const App: React.FC = () => {
   const [newFile, setNewFile] = useState<{ name: string; content: string } | null>(null);
   const [loading, setLoading] = useState(false);
   const [diffResult, setDiffResult] = useState<DiffResult | null>(null);
-  const [astSimilarity, setAstSimilarity] = useState<ASTSimilarityResponse | null>(null);
-  const [modelSimilarity, setModelSimilarity] = useState<ModelSimilarityResponse | null>(null);
+  const [hierarchicalResult, setHierarchicalResult] = useState<HierarchicalCompareResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [modelStatus, setModelStatus] = useState<ModelStatus | null>(null);
 
@@ -84,8 +113,7 @@ const App: React.FC = () => {
 
     setLoading(true);
     setError(null);
-    setAstSimilarity(null);
-    setModelSimilarity(null);
+    setHierarchicalResult(null);
 
     try {
       const result = analyzer.analyzeDiff(oldFile.content, newFile.content);
@@ -93,55 +121,54 @@ const App: React.FC = () => {
 
       if (modelStatus?.status === 'ready') {
         try {
-          const detectLang = (name: string) => {
-            const ext = name.split('.').pop()?.toLowerCase() || '';
-            if (['ts', 'tsx'].includes(ext)) return 'typescript';
-            return 'javascript';
+          // 检测语言（根据文件扩展名）
+          const detectLang = (filename: string): string => {
+            if (filename.endsWith('.tsx')) return 'tsx';
+            if (filename.endsWith('.ts')) return 'typescript';
+            if (filename.endsWith('.jsx') || filename.endsWith('.js')) return 'javascript';
+            if (filename.endsWith('.py')) return 'python';
+            return 'javascript'; // 默认
           };
-          const sbt1 = serializeToSBT(oldFile.content, detectLang(oldFile.name));
-          const sbt2 = serializeToSBT(newFile.content, detectLang(newFile.name));
           
-          console.log('SBT1 预览:', sbt1.substring(0, 200));
-          console.log('SBT2 预览:', sbt2.substring(0, 200));
+          const lang = detectLang(oldFile.name || newFile.name || '');
           
-          const astResponse = await fetch('/api/ast-similarity', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ sbt1, sbt2 }),
-          });
-          
-          if (astResponse.ok) {
-            const astData = await astResponse.json();
-            setAstSimilarity(astData);
-          }
-        } catch (e) {
-          console.log('AST 编码 API 调用失败:', e);
-        }
-        
-        try {
-          const response = await fetch('/api/compare', {
+          // 1. 后端用 Tree-sitter 拆分代码单元（CST 精确拆分，不丢失代码）
+          const splitResponse = await fetch('/api/split-with-treesitter', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               code1: oldFile.content,
               code2: newFile.content,
-              lang: 'javascript',
+              lang,
             }),
           });
+          
+          if (!splitResponse.ok) {
+            throw new Error('Tree-sitter 拆分失败');
+          }
+          
+          const splitData = await splitResponse.json();
+
+          // 2. 调用分层编码接口（DFG 提取 + GraphCodeBERT 编码 + 匈牙利匹配）
+          const response = await fetch('/api/compare-hierarchical', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              units1: splitData.units1,
+              units2: splitData.units2,
+              lang,  // 使用检测到的语言
+            }),
+          });
+          
           if (response.ok) {
             const data = await response.json();
-            setModelSimilarity({
-              similarity: data.similarity,
-              similarity_percent: data.similarity_percent,
-              interpretation: data.interpretation,
-              raw_cosine_similarity: data.raw_cosine_similarity,
-              text_similarity: data.text_similarity,
-              code1_analysis: data.code1_analysis,
-              code2_analysis: data.code2_analysis,
-            });
+            // 附加拆分的单元内容，方便展示原始代码
+            data.units1 = splitData.units1;
+            data.units2 = splitData.units2;
+            setHierarchicalResult(data);
           }
-        } catch {
-          console.log('GraphCodeBERT API 调用失败');
+        } catch (e) {
+          console.log('综合语义相似度计算失败:', e);
         }
       }
 
@@ -157,8 +184,7 @@ const App: React.FC = () => {
     setOldFile(null);
     setNewFile(null);
     setDiffResult(null);
-    setAstSimilarity(null);
-    setModelSimilarity(null);
+    setHierarchicalResult(null);
     setMode('upload');
     setError(null);
   };
@@ -265,8 +291,7 @@ const App: React.FC = () => {
           oldFileName={oldFile.name}
           newFileName={newFile.name}
           diffResult={diffResult}
-          astSimilarity={astSimilarity}
-          modelSimilarity={modelSimilarity}
+          hierarchicalResult={hierarchicalResult}
           onBack={resetFiles}
         />
       )}

@@ -33,6 +33,8 @@ _LANG_CONFIG = {
     'c':          ('tree_sitter_c',          DFG_c),
     'cpp':        ('tree_sitter_c',          DFG_c),
     'javascript': ('tree_sitter_javascript', DFG_javascript),
+    'typescript': ('tree_sitter_typescript', DFG_javascript),  # TypeScript 使用 JS 的 DFG 逻辑
+    'tsx':        ('tree_sitter_typescript', DFG_javascript),  # TSX 使用 JS 的 DFG 逻辑
     'go':         ('tree_sitter_go',         DFG_go),
     'ruby':       ('tree_sitter_ruby',       DFG_ruby),
 }
@@ -51,7 +53,15 @@ def _load_language(lang: str) -> Optional[Language]:
     try:
         import importlib
         mod = importlib.import_module(module_name)
-        language = Language(mod.language())
+        
+        # TypeScript 需要特殊处理：language_typescript() 或 language_tsx()
+        if lang == 'typescript':
+            language = Language(mod.language_typescript())
+        elif lang == 'tsx':
+            language = Language(mod.language_tsx())
+        else:
+            language = Language(mod.language())
+        
         _LANGUAGE_CACHE[lang] = language
         return language
     except (ImportError, Exception) as e:

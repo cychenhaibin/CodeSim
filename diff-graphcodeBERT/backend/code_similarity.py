@@ -228,6 +228,64 @@ class CodeSimilarityDetector:
         
         return intersection / union if union > 0 else 0.0
     
+    def _calculate_import_similarity(self, code1: str, code2: str) -> float:
+        """
+        计算 import 语句的精确相似度
+        
+        策略：
+        1. 提取所有导入的标识符（变量名、类型名、模块名）
+        2. 使用 Jaccard 相似度计算重叠程度
+        3. 考虑导入路径的相似性
+        """
+        # 提取所有标识符（import 后的名称）
+        # 匹配: import { foo, bar } from 'module'
+        #       import type { Foo } from 'module'
+        #       import * as foo from 'module'
+        #       import foo from 'module'
+        
+        def extract_import_identifiers(code: str) -> set:
+            identifiers = set()
+            
+            # 提取 { } 中的标识符
+            brace_matches = re.findall(r'\{([^}]+)\}', code)
+            for match in brace_matches:
+                # 分割并清理（处理 as 重命名）
+                for item in match.split(','):
+                    item = item.strip()
+                    # 处理 "foo as bar" -> 取 "foo"
+                    if ' as ' in item:
+                        item = item.split(' as ')[0].strip()
+                    # 移除 type 关键字
+                    item = item.replace('type ', '').strip()
+                    if item:
+                        identifiers.add(item.lower())
+            
+            # 提取 import 后直接跟的标识符（default import）
+            # import foo from 'module'
+            default_matches = re.findall(r'import\s+(\w+)\s+from', code)
+            identifiers.update(m.lower() for m in default_matches)
+            
+            # 提取 * as foo
+            star_matches = re.findall(r'import\s+\*\s+as\s+(\w+)', code)
+            identifiers.update(m.lower() for m in star_matches)
+            
+            return identifiers
+        
+        ids1 = extract_import_identifiers(code1)
+        ids2 = extract_import_identifiers(code2)
+        
+        if not ids1 and not ids2:
+            return 1.0  # 都没有导入，视为相同
+        
+        if not ids1 or not ids2:
+            return 0.0  # 一个有导入，一个没有
+        
+        # Jaccard 相似度
+        intersection = len(ids1 & ids2)
+        union = len(ids1 | ids2)
+        
+        return intersection / union if union > 0 else 0.0
+    
     def batch_encode(self, codes: List[str], lang: str = 'c') -> np.ndarray:
         """
         批量编码多个代码片段
@@ -1075,3 +1133,301 @@ class CodeSimilarityDetector:
             'removed': final_removed,
             'added': final_added
         }
+
+    # ========================================================================
+    # 函数级分层编码
+    # ========================================================================
+
+    def encode_code_unit(self, code: str, lang: str = 'javascript') -> dict:
+        """
+        将单个代码单元（函数/组件）编码为 768 维向量，同时返回编码详情。
+        【优化版】：加入 DFG 数据流图提取 + 智能截断策略
+        """
+        # 1. 提取这个小单元的 DFG
+        cleaned_code, code_tokens, dfg = self.preprocess_code(code, lang)
+        dfg_str = self._dfg_to_string(dfg)
+        
+        # 2. 智能拼接：如果 code + DFG 会超限，优先保留代码，压缩 DFG
+        if dfg_str:
+            combined_input = f"{cleaned_code}\n{dfg_str}"
+        else:
+            combined_input = cleaned_code
+
+        tokens_raw = self.tokenizer.tokenize(combined_input)
+        token_count = len(tokens_raw)
+        truncated = token_count > 510
+        
+        # 3. 如果超限，智能截断：优先保留代码，其次保留 DFG 的关键部分
+        if truncated and dfg_str:
+            # 计算代码和 DFG 各自的 token 数
+            code_tokens_only = self.tokenizer.tokenize(cleaned_code)
+            dfg_tokens_only = self.tokenizer.tokenize(dfg_str)
+            
+            # 如果代码本身就超过 450 token，只保留代码
+            if len(code_tokens_only) > 450:
+                combined_input = cleaned_code
+                dfg_str = "[DFG too large, truncated]"
+            else:
+                # 保留代码 + 部分 DFG（取前 N 条边）
+                max_dfg_tokens = 510 - len(code_tokens_only) - 10  # 留 10 个 token 缓冲
+                dfg_edges = dfg_str.split()
+                truncated_dfg_edges = []
+                current_tokens = 0
+                
+                for edge in dfg_edges:
+                    edge_tokens = len(self.tokenizer.tokenize(edge))
+                    if current_tokens + edge_tokens > max_dfg_tokens:
+                        break
+                    truncated_dfg_edges.append(edge)
+                    current_tokens += edge_tokens
+                
+                dfg_str = ' '.join(truncated_dfg_edges) + ' [...]'
+                combined_input = f"{cleaned_code}\n{dfg_str}"
+
+        # 4. 送入模型
+        inputs = self.tokenizer(
+            combined_input,
+            return_tensors='pt',
+            max_length=512,
+            truncation=True,
+            padding='max_length'
+        )
+
+        effective_tokens = int(inputs['attention_mask'].sum().item())
+
+        with torch.no_grad():
+            outputs = self.model(**inputs)
+            last_hidden_state = outputs.last_hidden_state
+
+            cls_vector = last_hidden_state[:, 0, :].squeeze()
+
+            attention_mask = inputs['attention_mask']
+            mask_expanded = attention_mask.unsqueeze(-1).expand(last_hidden_state.size()).float()
+            sum_embeddings = torch.sum(last_hidden_state * mask_expanded, 1)
+            sum_mask = torch.clamp(mask_expanded.sum(1), min=1e-9)
+            mean_vector = (sum_embeddings / sum_mask).squeeze()
+
+            vector = 0.7 * cls_vector + 0.3 * mean_vector
+
+        vec_np = vector.numpy()
+        return {
+            "vector": vec_np,
+            "token_count": token_count,
+            "effective_tokens": effective_tokens,
+            "truncated": truncated,
+            "vector_norm": float(np.linalg.norm(vec_np)),
+            "dfg_string": dfg_str,
+        }
+
+    def hierarchical_compare(
+        self,
+        units1: List[Dict[str, Any]],
+        units2: List[Dict[str, Any]],
+        lang: str = 'javascript'
+    ) -> Dict[str, Any]:
+        """
+        函数级分层编码比较：
+        1. 对每个单元编码为向量
+        2. 构建余弦相似度矩阵
+        3. 用匈牙利算法做最优匹配
+        4. 按代码行数加权计算最终相似度
+
+        Args:
+            units1: 代码A的单元列表 [{name, type, code, lineCount}, ...]
+            units2: 代码B的单元列表
+            lang: 编程语言
+
+        Returns:
+            包含匹配结果和最终相似度的字典
+        """
+        from scipy.optimize import linear_sum_assignment
+
+        n1 = len(units1)
+        n2 = len(units2)
+
+        if n1 == 0 and n2 == 0:
+            return {
+                "similarity": 1.0,
+                "similarity_percent": 100.0,
+                "matches": [],
+                "unmatched_a": [],
+                "unmatched_b": [],
+                "similarity_matrix": [],
+                "interpretation": "两份代码都为空",
+            }
+
+        if n1 == 0 or n2 == 0:
+            return {
+                "similarity": 0.0,
+                "similarity_percent": 0.0,
+                "matches": [],
+                "unmatched_a": [u["name"] for u in units1],
+                "unmatched_b": [u["name"] for u in units2],
+                "similarity_matrix": [],
+                "interpretation": "一份代码无可拆分单元",
+            }
+
+        # 1. 编码所有单元
+        encode_results1 = []
+        for u in units1:
+            r = self.encode_code_unit(u["code"], lang)
+            encode_results1.append(r)
+
+        encode_results2 = []
+        for u in units2:
+            r = self.encode_code_unit(u["code"], lang)
+            encode_results2.append(r)
+
+        vectors1_np = np.array([r["vector"] for r in encode_results1])
+        vectors2_np = np.array([r["vector"] for r in encode_results2])
+
+        encoding_details_a = [
+            {
+                "name": units1[i]["name"],
+                "type": units1[i]["type"],
+                "lines": units1[i]["lineCount"],
+                "token_count": encode_results1[i]["token_count"],
+                "effective_tokens": encode_results1[i]["effective_tokens"],
+                "truncated": encode_results1[i]["truncated"],
+                "vector_norm": round(encode_results1[i]["vector_norm"], 4),
+                "dfg_string": encode_results1[i]["dfg_string"],
+            }
+            for i in range(n1)
+        ]
+        encoding_details_b = [
+            {
+                "name": units2[i]["name"],
+                "type": units2[i]["type"],
+                "lines": units2[i]["lineCount"],
+                "token_count": encode_results2[i]["token_count"],
+                "effective_tokens": encode_results2[i]["effective_tokens"],
+                "truncated": encode_results2[i]["truncated"],
+                "vector_norm": round(encode_results2[i]["vector_norm"], 4),
+                "dfg_string": encode_results2[i]["dfg_string"],
+            }
+            for i in range(n2)
+        ]
+
+        # 2. 构建相似度矩阵
+        sim_matrix = cosine_similarity(vectors1_np, vectors2_np)
+        sim_matrix = np.clip(sim_matrix, 0, 1)
+        
+        # 2.1 对 imports 单元使用精确匹配（覆盖 GraphCodeBERT 的相似度）
+        for i in range(n1):
+            if units1[i].get('type') == 'imports':
+                for j in range(n2):
+                    if units2[j].get('type') == 'imports':
+                        # 使用精确的 import 相似度替代语义相似度
+                        exact_sim = self._calculate_import_similarity(
+                            units1[i]['code'], 
+                            units2[j]['code']
+                        )
+                        sim_matrix[i, j] = exact_sim
+                    else:
+                        # imports 不能和非 imports 匹配
+                        sim_matrix[i, j] = 0.0
+            else:
+                # 非 imports 不能和 imports 匹配
+                for j in range(n2):
+                    if units2[j].get('type') == 'imports':
+                        sim_matrix[i, j] = 0.0
+
+        # 3. 匈牙利算法求最优匹配（最小化代价 = 1 - similarity）
+        size = max(n1, n2)
+        cost_matrix = np.zeros((size, size))
+        cost_matrix[:n1, :n2] = 1.0 - sim_matrix
+        # 填充行列的代价设为 1（不匹配）
+        cost_matrix[n1:, :] = 1.0
+        cost_matrix[:, n2:] = 1.0
+
+        row_ind, col_ind = linear_sum_assignment(cost_matrix)
+
+        # 4. 解析匹配结果（设置相似度阈值，避免无意义的匹配）
+        SIMILARITY_THRESHOLD = 0.3  # 低于 30% 的匹配视为无效
+        
+        matches = []
+        matched_a = set()
+        matched_b = set()
+        total_weighted_sim = 0.0
+        total_weight = 0.0
+
+        for r, c in zip(row_ind, col_ind):
+            if r < n1 and c < n2:
+                sim = float(sim_matrix[r][c])
+                
+                # 如果相似度低于阈值，视为未匹配
+                if sim < SIMILARITY_THRESHOLD:
+                    continue
+                
+                weight = (units1[r]["lineCount"] + units2[c]["lineCount"]) / 2.0
+                matches.append({
+                    "unit_a": units1[r]["name"],
+                    "type_a": units1[r]["type"],
+                    "lines_a": units1[r]["lineCount"],
+                    "unit_b": units2[c]["name"],
+                    "type_b": units2[c]["type"],
+                    "lines_b": units2[c]["lineCount"],
+                    "similarity": round(sim, 4),
+                    "similarity_percent": round(sim * 100, 2),
+                    "weight": round(weight, 1),
+                })
+                total_weighted_sim += sim * weight
+                total_weight += weight
+                matched_a.add(r)
+                matched_b.add(c)
+
+        # 未匹配的单元（相似度视为 0，但权重计入）
+        unmatched_a = []
+        for i in range(n1):
+            if i not in matched_a:
+                unmatched_a.append(units1[i]["name"])
+                total_weight += units1[i]["lineCount"]
+
+        unmatched_b = []
+        for i in range(n2):
+            if i not in matched_b:
+                unmatched_b.append(units2[i]["name"])
+                total_weight += units2[i]["lineCount"]
+
+        # 5. 加权平均
+        final_similarity = total_weighted_sim / total_weight if total_weight > 0 else 0.0
+        final_similarity = float(max(0, min(1, final_similarity)))
+
+        # 按相似度降序排列匹配结果
+        matches.sort(key=lambda m: m["similarity"], reverse=True)
+
+        interpretation = self._get_hierarchical_interpretation(final_similarity, len(matches), len(unmatched_a), len(unmatched_b))
+
+        return {
+            "similarity": round(final_similarity, 4),
+            "similarity_percent": round(final_similarity * 100, 2),
+            "matches": matches,
+            "unmatched_a": unmatched_a,
+            "unmatched_b": unmatched_b,
+            "total_weight": round(total_weight, 1),
+            "encoding_details_a": encoding_details_a,
+            "encoding_details_b": encoding_details_b,
+            "similarity_matrix": sim_matrix.tolist(),
+            "unit_names_a": [u["name"] for u in units1],
+            "unit_names_b": [u["name"] for u in units2],
+            "interpretation": interpretation,
+        }
+
+    @staticmethod
+    def _get_hierarchical_interpretation(similarity: float, matched: int, unmatched_a: int, unmatched_b: int) -> str:
+        parts = []
+        if similarity >= 0.90:
+            parts.append(f"函数级分析：代码高度相似（{similarity:.1%}）")
+        elif similarity >= 0.70:
+            parts.append(f"函数级分析：代码较为相似（{similarity:.1%}）")
+        elif similarity >= 0.50:
+            parts.append(f"函数级分析：代码有一定相似性（{similarity:.1%}）")
+        else:
+            parts.append(f"函数级分析：代码差异较大（{similarity:.1%}）")
+
+        parts.append(f"成功匹配 {matched} 对函数单元")
+        if unmatched_a > 0:
+            parts.append(f"代码A有 {unmatched_a} 个未匹配单元")
+        if unmatched_b > 0:
+            parts.append(f"代码B有 {unmatched_b} 个未匹配单元")
+        return "，".join(parts)

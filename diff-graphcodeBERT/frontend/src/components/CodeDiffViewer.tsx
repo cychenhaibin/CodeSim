@@ -5,8 +5,8 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { diffLines, Change } from 'diff';
-import { DiffResult, ASTDiffAnalyzer } from '../utils/ASTDiffAnalyzer';
-import { Drawer, Button, Tag, Steps, Divider, Spin, Tooltip } from 'antd';
+import { DiffResult } from '../utils/ASTDiffAnalyzer';
+import { Drawer, Button, Tag, Steps, Divider, Spin, Tooltip, Table } from 'antd';
 import { CaretUpOutlined, CaretDownOutlined } from '@ant-design/icons';
 import './CodeDiffViewer.css';
 
@@ -32,39 +32,7 @@ function expandLineChanges(changes: Change[]): Change[] {
   return out;
 }
 
-/**
- * AST 向量编码相似度响应
- */
-interface VectorDebugInfo {
-  cls_norm: number;
-  mean_norm: number;
-  combined_norm: number;
-  bpe_tokens: number;
-  windows: number;
-}
-
-interface ASTSimilarityResponse {
-  similarity: number;
-  similarity_percent: number;
-  interpretation: string;
-  sbt1_tokens: number;
-  sbt2_tokens: number;
-  code1_vector?: VectorDebugInfo;
-  code2_vector?: VectorDebugInfo;
-}
-
-/**
- * GraphCodeBERT 相似度响应
- */
-interface ModelSimilarityResponse {
-  similarity: number;
-  similarity_percent: number;
-  interpretation: string;
-  raw_cosine_similarity?: number;
-  text_similarity?: number;
-  code1_analysis?: { token_count: number; dfg_edges: number };
-  code2_analysis?: { token_count: number; dfg_edges: number };
-}
+import { HierarchicalCompareResponse } from '../App';
 
 /**
  * 组件属性接口定义
@@ -75,8 +43,7 @@ interface CodeDiffViewerProps {
   oldFileName: string;
   newFileName: string;
   diffResult: DiffResult;
-  astSimilarity: ASTSimilarityResponse | null;
-  modelSimilarity: ModelSimilarityResponse | null;
+  hierarchicalResult: HierarchicalCompareResponse | null;
   onBack?: () => void;
 }
 
@@ -88,13 +55,12 @@ const CodeDiffViewer: React.FC<CodeDiffViewerProps> = ({
   newCode,
   oldFileName,
   diffResult,
-  astSimilarity,
-  modelSimilarity,
+  hierarchicalResult,
   onBack,
 }) => {
   // 折叠状态
   const [collapsed, setCollapsed] = useState(false);
-  // 当前打开的详情面板: null | 'ast-vector' | 'ast-structure' | 'semantic'
+  // 当前打开的详情面板: null | 'ast-structure' | 'semantic'
   const [detailPanel, setDetailPanel] = useState<string | null>(null);
 
   // 处理行级变化
@@ -186,21 +152,6 @@ const CodeDiffViewer: React.FC<CodeDiffViewerProps> = ({
           </span>
         </div>
         
-        {/* AST 向量编码相似度（核心） */}
-        {astSimilarity && (
-          <div className="file-info ast-vector-row">
-            <Tooltip title="基于 AST SBT 序列化 + GraphCodeBERT 向量编码的余弦相似度">
-              <span className="label">AST 向量相似度:</span>
-            </Tooltip>
-            <span className={`ast-vector-value ${astSimilarity.similarity >= 0.85 ? 'high' : astSimilarity.similarity >= 0.5 ? 'medium' : 'low'}`}>
-              {astSimilarity.similarity_percent.toFixed(2)}%
-            </span>
-            <Button size="small" className="detail-btn" onClick={() => setDetailPanel('ast-vector')}>
-              计算详情
-            </Button>
-          </div>
-        )}
-
         {/* AST 结构相似度（前端计算） */}
         <div className="file-info ast-structure-row">
           <Tooltip title="前端 Babel 解析 AST → 提取结构签名 → 多重集比较">
@@ -212,13 +163,18 @@ const CodeDiffViewer: React.FC<CodeDiffViewerProps> = ({
           </Button>
         </div>
 
-        {/* GraphCodeBERT 语义相似度（补充参考） */}
-        {modelSimilarity && (
+        {/* 综合语义相似度（函数级分层编码） */}
+        {hierarchicalResult && (
           <div className="file-info model-similarity-row">
-            <Tooltip title="基于代码 + DFG 数据流图的 GraphCodeBERT 语义编码，经文本 Jaccard 校准">
-              <span className="label">语义相似度(参考):</span>
+            <Tooltip title="将代码拆分为小单元，提取DFG数据流图，使用 GraphCodeBERT 独立编码并进行匈牙利算法最优匹配">
+              <span className="label">综合语义相似度:</span>
             </Tooltip>
-            <span className="model-similarity-value">{modelSimilarity.similarity_percent.toFixed(2)}%</span>
+            <span className={`ast-vector-value ${hierarchicalResult.similarity >= 0.85 ? 'high' : hierarchicalResult.similarity >= 0.5 ? 'medium' : 'low'}`}>
+              {hierarchicalResult.similarity_percent.toFixed(2)}%
+            </span>
+            <Tag color="blue" style={{ marginLeft: 8, fontSize: 11 }}>
+              {hierarchicalResult.matches.length} 对匹配
+            </Tag>
             <Button size="small" className="detail-btn" onClick={() => setDetailPanel('semantic')}>
               计算详情
             </Button>
@@ -325,146 +281,14 @@ const CodeDiffViewer: React.FC<CodeDiffViewerProps> = ({
         width={880}
         className="detail-drawer"
         title={
-          detailPanel === 'ast-vector'
-            ? 'AST 向量相似度 — 计算过程'
-            : detailPanel === 'ast-structure'
-              ? 'AST 结构相似度 — 计算过程'
-              : '语义相似度 — 计算过程'
+          detailPanel === 'ast-structure'
+            ? 'AST 结构相似度 — 计算过程'
+            : '综合语义相似度 — 计算过程'
         }
         onClose={() => setDetailPanel(null)}
         maskClosable
         closable
       >
-        {/* ---------- AST 向量相似度 ---------- */}
-        {detailPanel === 'ast-vector' && astSimilarity && (
-          <div className="drawer-detail-panel">
-            <Steps
-              current={2}
-              size="small"
-              className="drawer-h-steps"
-              labelPlacement="vertical"
-              items={[
-                { title: '前端 AST 解析 + SBT 序列化', status: 'finish' },
-                { title: '后端 GraphCodeBERT 向量编码', status: 'finish' },
-                { title: '余弦相似度计算', status: 'finish' },
-              ]}
-            />
-            <div className="drawer-step-content">
-              <div className="step-section">
-                <div className="step-section-title">步骤 1: 前端 AST 解析 + SBT 序列化</div>
-                <div className="step-desc-block">
-                  <p>
-                    使用 Babel 将两份代码解析为 AST，然后通过 Structure-Based Traversal
-                    算法将 AST 树序列化为字符串。标识符泛化为 _ID_，字面量泛化为 _STR_/_NUM_，
-                    只保留结构信息。
-                  </p>
-                  <div className="step-data">
-                    代码A SBT token 数: <strong>{astSimilarity.sbt1_tokens}</strong>{' | '}
-                    代码B SBT token 数: <strong>{astSimilarity.sbt2_tokens}</strong>
-                  </div>
-                  <div className="step-data-note">
-                    <strong>SBT token 是什么？</strong>
-                    <p>AST 树 → SBT 字符串 → 按空格拆分 = token。举个例子：</p>
-                    <pre className="code-example">{`function add(a, b) {
-  return a + b;
-}`}</pre>
-                    <p>经过 Babel 解析成 AST 后，SBT 算法前序遍历，记录每个节点的进入和离开，变量名泛化为 <code>_ID_</code>，字面量泛化为 <code>_STR_</code>/<code>_NUM_</code>，生成：</p>
-                    <pre className="code-example">{`( FunctionDeclaration ( Identifier _ID_ ) ( Params ( Identifier _ID_ ) ( Identifier _ID_ ) ) ( BlockStatement ( ReturnStatement ( BinaryExpression + ( Identifier _ID_ ) ( Identifier _ID_ ) ) ) ) )`}</pre>
-                    <ul>
-                      <li>变量名 add、a、b 全部被泛化成 _ID_</li>
-                      <li>字符串字面量会被泛化成 _STR_，数字泛化成 _NUM_</li>
-                      <li>只保留了结构信息（什么节点类型、怎么嵌套的）</li>
-                    </ul>
-                    <p>然后把这个字符串按空格拆分，每个片段就是一个 SBT token。上面的例子大约有 20 多个 token。</p>
-                    <p>token 数反映代码的<strong>结构复杂度</strong>——代码越长、嵌套越深，token 数越大。</p>
-                    <p>这两个数字会被送到后端 GraphCodeBERT 模型，模型把它们编码成 768 维向量，然后计算余弦相似度。</p>
-                  </div>
-                </div>
-              </div>
-              <Divider />
-              <div className="step-section">
-                <div className="step-section-title">步骤 2: 后端 GraphCodeBERT 向量编码</div>
-                <div className="step-desc-block">
-                  <p>
-                    将两份 SBT 字符串分别输入 GraphCodeBERT 模型（microsoft/graphcodebert-base），
-                    取 0.7 × [CLS] 向量 + 0.3 × MeanPooling 向量，得到两个 768 维向量。
-                  </p>
-                  <div className="step-data">
-                    向量维度: <strong>768</strong>{' | '}
-                    模型: <strong>graphcodebert-base</strong>
-                  </div>
-                  {astSimilarity.code1_vector && astSimilarity.code2_vector && (
-                    <div className="step-vector-table">
-                      <table>
-                        <thead>
-                          <tr>
-                            <th></th>
-                            <th>[CLS] 范数</th>
-                            <th>MeanPooling 范数</th>
-                            <th>混合向量范数</th>
-                            <th>BPE token 数</th>
-                            <th>滑动窗口数</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          <tr>
-                            <td><strong>代码 A</strong></td>
-                            <td>{astSimilarity.code1_vector.cls_norm.toFixed(4)}</td>
-                            <td>{astSimilarity.code1_vector.mean_norm.toFixed(4)}</td>
-                            <td>{astSimilarity.code1_vector.combined_norm.toFixed(4)}</td>
-                            <td>{astSimilarity.code1_vector.bpe_tokens}</td>
-                            <td>{astSimilarity.code1_vector.windows}</td>
-                          </tr>
-                          <tr>
-                            <td><strong>代码 B</strong></td>
-                            <td>{astSimilarity.code2_vector.cls_norm.toFixed(4)}</td>
-                            <td>{astSimilarity.code2_vector.mean_norm.toFixed(4)}</td>
-                            <td>{astSimilarity.code2_vector.combined_norm.toFixed(4)}</td>
-                            <td>{astSimilarity.code2_vector.bpe_tokens}</td>
-                            <td>{astSimilarity.code2_vector.windows}</td>
-                          </tr>
-                        </tbody>
-                      </table>
-                      <p className="vector-note">
-                        混合向量 = 0.7 × [CLS] + 0.3 × MeanPooling，范数 = 向量模长（L2）。
-                        模型单窗口上限 512 BPE token，超出时使用滑动窗口（步长 256）分段编码后取平均，确保完整 AST 结构都被模型覆盖。
-                      </p>
-                    </div>
-                  )}
-                  <div className="step-data-note">
-                    <strong>[CLS] 是什么？</strong>
-                    <p>模型在输入序列最前面加一个特殊的 [CLS] token，处理完后该位置的输出向量代表整段代码的「全局语义摘要」。</p>
-                    <strong>MeanPooling 是什么？</strong>
-                    <p>把序列中所有 token 的输出向量取平均值，能捕捉更多分散的局部细节。</p>
-                    <strong>为什么混合？</strong>
-                    <p>0.7 × [CLS] 抓全局语义 + 0.3 × MeanPooling 补充局部细节，两者互补更鲁棒。</p>
-                    <strong>不管 token 数多少都是 768 维？</strong>
-                    <p>是的。768 是 GraphCodeBERT 的固定隐藏层维度，跟输入长度无关。不管输入 100 还是 512 个 token，输出都是一个 768 维向量。</p>
-                  </div>
-                </div>
-              </div>
-              <Divider />
-              <div className="step-section">
-                <div className="step-section-title">步骤 3: 余弦相似度计算</div>
-                <div className="step-desc-block">
-                  <p>计算两个 768 维向量的余弦相似度:</p>
-                  <div className="step-formula">cos(v1, v2) = (v1 · v2) / (|v1| × |v2|)</div>
-                  <div className="step-data">
-                    余弦相似度: <strong>{astSimilarity.similarity.toFixed(6)}</strong>
-                  </div>
-                  <div className="step-result">
-                    <span className="result-label">最终得分</span>
-                    <Tag color="blue" style={{ fontSize: 16, fontWeight: 700, padding: '2px 12px' }}>
-                      {astSimilarity.similarity_percent.toFixed(2)}%
-                    </Tag>
-                    <Tag color="gray">{astSimilarity.interpretation}</Tag>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
         {/* ---------- AST 结构相似度 ---------- */}
         {detailPanel === 'ast-structure' && (
           <div className="drawer-detail-panel">
@@ -553,8 +377,8 @@ const CodeDiffViewer: React.FC<CodeDiffViewerProps> = ({
           </div>
         )}
 
-        {/* ---------- 语义相似度 ---------- */}
-        {detailPanel === 'semantic' && modelSimilarity && (
+        {/* ---------- 综合语义相似度 ---------- */}
+        {detailPanel === 'semantic' && hierarchicalResult && (
           <div className="drawer-detail-panel">
             <Steps
               current={3}
@@ -562,93 +386,729 @@ const CodeDiffViewer: React.FC<CodeDiffViewerProps> = ({
               className="drawer-h-steps"
               labelPlacement="vertical"
               items={[
-                { title: '后端代码预处理', status: 'finish' },
-                { title: 'DFG 数据流图提取', status: 'finish' },
-                { title: 'GraphCodeBERT 编码', status: 'finish' },
-                { title: '校准余弦相似度', status: 'finish' },
+                { title: 'Tree-sitter 精确拆分', status: 'finish' },
+                { title: 'DFG 提取与向量编码', status: 'finish' },
+                { title: '匈牙利算法最优匹配', status: 'finish' },
               ]}
             />
             <div className="drawer-step-content">
               <div className="step-section">
-                <div className="step-section-title">步骤 1: 后端代码预处理</div>
-                <div className="step-desc-block">
-                  <p>去除注释和文档字符串，使用 tree-sitter 将代码解析为 AST。</p>
-                  {modelSimilarity.code1_analysis && modelSimilarity.code2_analysis && (
-                    <div className="step-data">
-                      代码A token 数: <strong>{modelSimilarity.code1_analysis.token_count}</strong>{' | '}
-                      代码B token 数: <strong>{modelSimilarity.code2_analysis.token_count}</strong>
-                    </div>
-                  )}
-                </div>
-              </div>
-              <Divider />
-              <div className="step-section">
-                <div className="step-section-title">步骤 2: DFG 数据流图提取</div>
+                <div className="step-section-title">步骤 1: Tree-sitter 精确拆分（后端）</div>
                 <div className="step-desc-block">
                   <p>
-                    从 AST 中提取变量间的数据流依赖关系（comesFrom / computedFrom），
-                    例如 y = x 则 y comesFrom x，z = x + y 则 z computedFrom x, y。
-                  </p>
-                  {modelSimilarity.code1_analysis && modelSimilarity.code2_analysis && (
-                    <div className="step-data">
-                      代码A DFG 边数: <strong>{modelSimilarity.code1_analysis.dfg_edges}</strong>{' | '}
-                      代码B DFG 边数: <strong>{modelSimilarity.code2_analysis.dfg_edges}</strong>
-                    </div>
-                  )}
-                </div>
-              </div>
-              <Divider />
-              <div className="step-section">
-                <div className="step-section-title">步骤 3: GraphCodeBERT 编码</div>
-                <div className="step-desc-block">
-                  <p>
-                    将「代码 token + DFG 关系字符串」拼接后输入 GraphCodeBERT 模型，
-                    取 0.7 × [CLS] + 0.3 × MeanPooling 得到 768 维语义向量。
+                    使用 Tree-sitter 解析器在后端将代码拆分为函数、组件、Hooks、变量等语义单元。
+                    Tree-sitter 生成 CST（具体语法树），保留所有源代码细节，确保不丢失任何代码。
                   </p>
                   <div className="step-data">
-                    向量维度: <strong>768</strong>{' | '}
-                    模型: <strong>graphcodebert-base</strong>
+                    代码A 拆分单元数: <strong>{hierarchicalResult.units1?.length || 0}</strong>{' | '}
+                    代码B 拆分单元数: <strong>{hierarchicalResult.units2?.length || 0}</strong>
                   </div>
                 </div>
               </div>
               <Divider />
               <div className="step-section">
-                <div className="step-section-title">步骤 4: 校准余弦相似度</div>
+                <div className="step-section-title">步骤 2: DFG 提取与向量编码（后端）</div>
                 <div className="step-desc-block">
                   <p>
-                    先算原始余弦相似度 cos_sim，再算文本 Jaccard 相似度 text_sim（token 集合交并比），
-                    最终结果:
+                    对每个拆分后的小单元，使用 Tree-sitter 提取其内部的 DFG（数据流图），
+                    记录变量之间的"值从何处来"的依赖关系。
                   </p>
-                  <div className="step-formula">
-                    similarity = sqrt(cos_sim × text_sim)
+                  <p>
+                    然后将 <code>代码 + DFG</code> 一起送入 GraphCodeBERT 模型编码为 768 维向量。
+                    如果 token 数超过 512，会智能截断：优先保留完整代码，压缩 DFG。
+                  </p>
+                  <div className="step-data">
+                    代码A单元数: <strong>{hierarchicalResult.encoding_details_a?.length || 0}</strong>{' | '}
+                    代码B单元数: <strong>{hierarchicalResult.encoding_details_b?.length || 0}</strong>
                   </div>
-                  {modelSimilarity.raw_cosine_similarity != null && (
-                    <div className="step-data">
-                      原始余弦相似度 (cos_sim): <strong>{modelSimilarity.raw_cosine_similarity.toFixed(6)}</strong>
-                    </div>
-                  )}
-                  {modelSimilarity.text_similarity != null && (
-                    <div className="step-data">
-                      文本 Jaccard 相似度 (text_sim): <strong>{modelSimilarity.text_similarity.toFixed(6)}</strong>
-                    </div>
-                  )}
-                  {modelSimilarity.raw_cosine_similarity != null && modelSimilarity.text_similarity != null && (
-                    <div className="step-formula">
-                      sqrt({modelSimilarity.raw_cosine_similarity.toFixed(4)} × {modelSimilarity.text_similarity.toFixed(4)}) = {modelSimilarity.similarity.toFixed(6)}
-                    </div>
-                  )}
-                  {modelSimilarity.text_similarity != null && modelSimilarity.text_similarity < 0.3 && (
-                    <div className="step-data" style={{ color: '#e65100' }}>
-                      text_sim &lt; 0.3，触发额外惩罚: × ({(0.5 + modelSimilarity.text_similarity).toFixed(4)})
-                    </div>
-                  )}
+                </div>
+              </div>
+              <Divider />
+              <div className="step-section">
+                <div className="step-section-title">步骤 3: 匈牙利算法最优匹配</div>
+                <div className="step-desc-block">
+                  <p>
+                    <strong>匈牙利算法（Hungarian Algorithm）</strong>是一种在多项式时间内求解二分图最大权匹配问题的组合优化算法。
+                    在代码相似度检测中，我们用它来找到两组代码单元之间的<strong>全局最优一对一匹配</strong>。
+                  </p>
+                  
+                  <div style={{ background: '#f5f5f5', padding: 12, borderRadius: 4, marginTop: 12, marginBottom: 12 }}>
+                    <strong>核心步骤：</strong>
+                    <ol style={{ marginTop: 8, marginBottom: 0, paddingLeft: 20, fontSize: 13 }}>
+                      <li>构建相似度矩阵（所有单元两两计算余弦相似度）</li>
+                      <li><strong>类型隔离</strong>：imports 只能和 imports 匹配，不同类型相似度设为 0</li>
+                      <li><strong>imports 精确匹配</strong>：使用 Jaccard 相似度（导入标识符的集合重叠度）</li>
+                      <li>转换为代价矩阵（代价 = 1 - 相似度）</li>
+                      <li>匈牙利算法求解（找到总代价最小 = 总相似度最大的匹配）</li>
+                      <li><strong>过滤低相似度</strong>：相似度 &lt; 30% 的匹配视为无效，标记为"未匹配"</li>
+                      <li>按行数加权平均，计算最终相似度</li>
+                    </ol>
+                  </div>
+                  
+                  <div className="step-data">
+                    成功匹配: <strong>{hierarchicalResult.matches.length}</strong> 对{' | '}
+                    代码A未匹配: <strong>{hierarchicalResult.unmatched_a.length}</strong> 个{' | '}
+                    代码B未匹配: <strong>{hierarchicalResult.unmatched_b.length}</strong> 个
+                  </div>
                   <div className="step-result">
                     <span className="result-label">最终得分</span>
                     <Tag color="blue" style={{ fontSize: 16, fontWeight: 700, padding: '2px 12px' }}>
-                      {modelSimilarity.similarity_percent.toFixed(2)}%
+                      {hierarchicalResult.similarity_percent.toFixed(2)}%
                     </Tag>
-                    <Tag color="gray">{modelSimilarity.interpretation}</Tag>
+                    <Tag color="gray">{hierarchicalResult.interpretation}</Tag>
                   </div>
+                </div>
+              </div>
+
+              {/* 3.1 相似度矩阵热力图 */}
+              <Divider />
+              <div className="step-section">
+                <div className="step-section-title">3.1 相似度矩阵热力图</div>
+                <div className="step-desc-block">
+                  <p style={{ fontSize: 13, color: '#666' }}>
+                    矩阵展示了所有单元之间的相似度。<strong>红色边框 + ✓</strong> 标记的是匈牙利算法选中的最优匹配对。
+                  </p>
+                  
+                  {(!hierarchicalResult.similarity_matrix || !hierarchicalResult.unit_names_a || !hierarchicalResult.unit_names_b) ? (
+                    <div style={{ padding: 16, background: '#fff1f0', border: '1px solid #ffccc7', borderRadius: 4, marginTop: 16 }}>
+                      <strong>数据缺失：</strong>
+                      <ul>
+                        <li>similarity_matrix: {hierarchicalResult.similarity_matrix ? '✓' : '✗'}</li>
+                        <li>unit_names_a: {hierarchicalResult.unit_names_a ? '✓' : '✗'}</li>
+                        <li>unit_names_b: {hierarchicalResult.unit_names_b ? '✓' : '✗'}</li>
+                      </ul>
+                    </div>
+                  ) : (
+                    <>
+                    <div style={{ marginTop: 16, marginBottom: 12 }}>
+                      <span style={{ color: '#595959' }}>矩阵大小: </span>
+                      <strong>{hierarchicalResult.unit_names_a.length} × {hierarchicalResult.unit_names_b.length}</strong>
+                    </div>
+                    <Table
+                      dataSource={hierarchicalResult.unit_names_a.map((nameA, i) => {
+                        const rowData: any = {
+                          key: i,
+                          unitName: nameA
+                        };
+                        hierarchicalResult.unit_names_b.forEach((nameB, j) => {
+                          rowData[`col_${j}`] = {
+                            similarity: hierarchicalResult.similarity_matrix[i]?.[j] || 0,
+                            isMatched: hierarchicalResult.matches.some(m => m.unit_a === nameA && m.unit_b === nameB)
+                          };
+                        });
+                        return rowData;
+                      })}
+                      columns={[
+                        {
+                          title: '代码A \\ 代码B',
+                          dataIndex: 'unitName',
+                          key: 'unitName',
+                          fixed: 'left' as const,
+                          width: 200,
+                          ellipsis: { showTitle: true },
+                          render: (name: string) => (
+                            <Tooltip title={name}>
+                              <span style={{ fontWeight: 600 }}>{name}</span>
+                            </Tooltip>
+                          )
+                        },
+                        ...hierarchicalResult.unit_names_b.map((nameB, j) => ({
+                          title: <Tooltip title={nameB}>{nameB.length > 15 ? nameB.substring(0, 15) + '...' : nameB}</Tooltip>,
+                          dataIndex: `col_${j}`,
+                          key: `col_${j}`,
+                          width: 100,
+                          align: 'center' as const,
+                          render: (cell: { similarity: number; isMatched: boolean }) => {
+                            const sim = cell.similarity;
+                            const isMatched = cell.isMatched;
+                            const percentage = (sim * 100).toFixed(0);
+                            
+                            const getColor = (s: number) => {
+                              if (s >= 0.9) return { bg: '#0050b3', text: '#fff' };
+                              if (s >= 0.8) return { bg: '#1890ff', text: '#fff' };
+                              if (s >= 0.7) return { bg: '#40a9ff', text: '#fff' };
+                              if (s >= 0.6) return { bg: '#69c0ff', text: '#000' };
+                              if (s >= 0.5) return { bg: '#91d5ff', text: '#000' };
+                              if (s >= 0.4) return { bg: '#bae7ff', text: '#000' };
+                              if (s >= 0.3) return { bg: '#e6f7ff', text: '#000' };
+                              return { bg: '#fff', text: '#bfbfbf' };
+                            };
+
+                            const colors = getColor(sim);
+
+                            return (
+                              <div style={{ 
+                                background: isMatched ? '#fff2e8' : colors.bg,
+                                color: isMatched ? '#ff4d4f' : colors.text,
+                                padding: isMatched ? '5px' : '8px',
+                                margin: isMatched ? '-8px' : '-8px',
+                                fontWeight: isMatched ? 700 : 600,
+                                fontSize: isMatched ? 14 : 13,
+                                border: isMatched ? '3px solid #ff4d4f' : 'none',
+                                borderRadius: isMatched ? 4 : 0,
+                                boxSizing: 'border-box' as const,
+                                height: '100%',
+                                display: 'flex',
+                                flexDirection: 'column' as const,
+                                alignItems: 'center',
+                                justifyContent: 'center'
+                              }}>
+                                <div>{percentage}%</div>
+                              </div>
+                            );
+                          }
+                        }))
+                      ]}
+                      pagination={false}
+                      scroll={{ x: 'max-content', y: 600 }}
+                      size="small"
+                      bordered
+                    />
+                    </>
+                  )}
+                  
+                <div style={{ marginTop: 20 }}>
+                  <Divider orientation="left">图例说明</Divider>
+                  
+                  <Table
+                    dataSource={[
+                      { key: '1', range: '90% - 100%', color: '#0050b3', desc: '极高相似', textColor: '#fff' },
+                      { key: '2', range: '80% - 90%', color: '#1890ff', desc: '高度相似', textColor: '#fff' },
+                      { key: '3', range: '70% - 80%', color: '#40a9ff', desc: '较为相似', textColor: '#fff' },
+                      { key: '4', range: '60% - 70%', color: '#69c0ff', desc: '中上相似', textColor: '#000' },
+                      { key: '5', range: '50% - 60%', color: '#91d5ff', desc: '中等相似', textColor: '#000' },
+                      { key: '6', range: '40% - 50%', color: '#bae7ff', desc: '偏低相似', textColor: '#000' },
+                      { key: '7', range: '30% - 40%', color: '#e6f7ff', desc: '低相似度', textColor: '#000' },
+                      { key: '8', range: '< 30%', color: '#fff', desc: '几乎不同', textColor: '#bfbfbf' }
+                    ]}
+                    columns={[
+                      {
+                        title: '相似度范围',
+                        dataIndex: 'range',
+                        key: 'range',
+                        width: 150,
+                        align: 'center' as const
+                      },
+                      {
+                        title: '颜色示例',
+                        dataIndex: 'color',
+                        key: 'color',
+                        width: 120,
+                        align: 'center' as const,
+                        render: (color: string, record: any) => (
+                          <div style={{ 
+                            background: color,
+                            color: record.textColor,
+                            padding: '8px 16px',
+                            borderRadius: 4,
+                            fontWeight: 600,
+                            fontSize: 13
+                          }}>
+                            {record.range.split(' - ')[0]}
+                          </div>
+                        )
+                      },
+                      {
+                        title: '说明',
+                        dataIndex: 'desc',
+                        key: 'desc',
+                        align: 'center' as const
+                      }
+                    ]}
+                    pagination={false}
+                    size="small"
+                    style={{ marginBottom: 16 }}
+                  />
+
+                  <Table
+                    dataSource={[
+                      { 
+                        key: 'matched', 
+                        mark: '✓', 
+                        desc: '匈牙利算法选中的匹配',
+                        style: '红色边框 + 橙色背景'
+                      }
+                    ]}
+                    columns={[
+                      {
+                        title: '标记',
+                        dataIndex: 'mark',
+                        key: 'mark',
+                        width: 80,
+                        align: 'center' as const,
+                        render: (mark: string) => (
+                          <div style={{ fontSize: 24, color: '#ff4d4f', fontWeight: 700 }}>
+                            {mark}
+                          </div>
+                        )
+                      },
+                      {
+                        title: '说明',
+                        dataIndex: 'desc',
+                        key: 'desc'
+                      },
+                      {
+                        title: '视觉样式',
+                        dataIndex: 'style',
+                        key: 'style',
+                        align: 'center' as const
+                      }
+                    ]}
+                    pagination={false}
+                    size="small"
+                    style={{ marginBottom: 16 }}
+                  />
+
+                  <div style={{ 
+                    padding: 12, 
+                    background: '#fffbe6', 
+                    borderRadius: 4,
+                    border: '1px solid #ffe58f'
+                  }}>
+                    <div style={{ fontWeight: 600, marginBottom: 8 }}>匹配规则</div>
+                    <ul style={{ margin: 0, paddingLeft: 20, fontSize: 13 }}>
+                      <li>相似度 &lt; 30% 的匹配会被自动过滤</li>
+                      <li><code>imports</code> 类型只能与 <code>imports</code> 匹配</li>
+                      <li>使用 Jaccard 相似度精确匹配 import 语句</li>
+                    </ul>
+                  </div>
+                </div>
+                </div>
+              </div>
+
+              {/* 3.2 综合相似度计算过程 */}
+              <Divider />
+              <div className="step-section">
+                <div className="step-section-title">3.2 综合相似度计算过程（加权平均）</div>
+                <div className="step-desc-block">
+                  <p>
+                    <strong>计算公式：</strong>
+                  </p>
+                  <div style={{ 
+                    background: '#f5f5f5', 
+                    padding: 16, 
+                    borderRadius: 4, 
+                    fontFamily: 'monospace',
+                    fontSize: 14,
+                    marginTop: 8,
+                    marginBottom: 16
+                  }}>
+                    综合相似度 = Σ(相似度 × 权重) / Σ(权重)
+                    <br />
+                    <br />
+                    权重 = (代码A行数 + 代码B行数) / 2
+                  </div>
+
+                  <p><strong>详细计算：</strong></p>
+                  <div style={{ fontSize: 13, marginTop: 16 }}>
+                    {/* 匹配的单元 */}
+                    {hierarchicalResult.matches.length > 0 && (
+                      <div style={{ marginBottom: 24 }}>
+                        <div style={{ 
+                          fontWeight: 600, 
+                          color: '#52c41a', 
+                          marginBottom: 12,
+                          fontSize: 14,
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 8
+                        }}>
+                          <span style={{ fontSize: 18 }}>✓</span>
+                          匹配的单元（贡献相似度）
+                        </div>
+                        <Table
+                          dataSource={hierarchicalResult.matches.map((match, idx) => ({
+                            key: idx,
+                            unit_a: match.unit_a,
+                            unit_b: match.unit_b,
+                            similarity: match.similarity,
+                            lines_a: match.lines_a,
+                            lines_b: match.lines_b,
+                            weight: match.weight,
+                            contribution: match.similarity * match.weight
+                          }))}
+                          columns={[
+                            {
+                              title: '单元匹配',
+                              dataIndex: 'unit_a',
+                              key: 'match',
+                              render: (_: any, record: any) => (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                  <span style={{ color: '#1890ff' }}>→</span>
+                                  <span style={{ wordBreak: 'break-word' }}>
+                                    {record.unit_a} <span style={{ color: '#999' }}>↔</span> {record.unit_b}
+                                  </span>
+                                </div>
+                              )
+                            },
+                            {
+                              title: '相似度',
+                              dataIndex: 'similarity',
+                              key: 'similarity',
+                              width: 100,
+                              align: 'center' as const,
+                              render: (sim: number) => (
+                                <span style={{ 
+                                  fontWeight: 600,
+                                  color: sim >= 0.8 ? '#52c41a' : sim >= 0.5 ? '#1890ff' : '#666'
+                                }}>
+                                  {(sim * 100).toFixed(1)}%
+                                </span>
+                              )
+                            },
+                            {
+                              title: '行数A',
+                              dataIndex: 'lines_a',
+                              key: 'lines_a',
+                              width: 80,
+                              align: 'center' as const
+                            },
+                            {
+                              title: '行数B',
+                              dataIndex: 'lines_b',
+                              key: 'lines_b',
+                              width: 80,
+                              align: 'center' as const
+                            },
+                            {
+                              title: '权重',
+                              dataIndex: 'weight',
+                              key: 'weight',
+                              width: 80,
+                              align: 'center' as const,
+                              render: (weight: number) => (
+                                <span style={{ fontWeight: 600 }}>{weight}</span>
+                              )
+                            },
+                            {
+                              title: '贡献计算',
+                              dataIndex: 'contribution',
+                              key: 'contribution',
+                              width: 220,
+                              align: 'right' as const,
+                              render: (_: any, record: any) => (
+                                <span style={{ fontFamily: 'Menlo, Monaco, "Courier New", monospace', fontSize: 11 }}>
+                                  <span style={{ color: '#666' }}>{record.similarity.toFixed(4)}</span>
+                                  <span style={{ color: '#999', margin: '0 4px' }}>×</span>
+                                  <span style={{ color: '#666' }}>{record.weight}</span>
+                                  <span style={{ color: '#999', margin: '0 4px' }}>=</span>
+                                  <span style={{ fontWeight: 600, color: '#1890ff' }}>{record.contribution.toFixed(2)}</span>
+                                </span>
+                              )
+                            }
+                          ]}
+                          pagination={false}
+                          size="small"
+                          bordered
+                          summary={() => (
+                            <Table.Summary fixed>
+                              <Table.Summary.Row style={{ background: 'linear-gradient(180deg, #e6f7ff 0%, #bae7ff 100%)' }}>
+                                <Table.Summary.Cell index={0} colSpan={5} align="right">
+                                  <span style={{ fontWeight: 600, fontSize: 13, color: '#0050b3' }}>
+                                    匹配单元总贡献：
+                                  </span>
+                                </Table.Summary.Cell>
+                                <Table.Summary.Cell index={1} align="right">
+                                  <span style={{ 
+                                    fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+                                    fontSize: 14,
+                                    fontWeight: 700,
+                                    color: '#0050b3'
+                                  }}>
+                                    {hierarchicalResult.matches.reduce((sum, m) => sum + m.similarity * m.weight, 0).toFixed(2)}
+                                  </span>
+                                </Table.Summary.Cell>
+                              </Table.Summary.Row>
+                            </Table.Summary>
+                          )}
+                        />
+                      </div>
+                    )}
+
+                    {/* 未匹配的单元 */}
+                    {(hierarchicalResult.unmatched_a.length > 0 || hierarchicalResult.unmatched_b.length > 0) && (
+                      <div style={{ marginBottom: 24 }}>
+                        <div style={{ 
+                          fontWeight: 600, 
+                          color: '#ff4d4f', 
+                          marginBottom: 12,
+                          fontSize: 14,
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 8
+                        }}>
+                          <span style={{ fontSize: 18 }}>✗</span>
+                          未匹配的单元（相似度 = 0，但权重计入）
+                        </div>
+                        <Table
+                          dataSource={[
+                            ...hierarchicalResult.unmatched_a.map((name, idx) => {
+                              const unit = hierarchicalResult.units1?.find(u => u.name === name);
+                              return {
+                                key: `a-${idx}`,
+                                name,
+                                source: 'A',
+                                lines: unit?.lineCount || 0
+                              };
+                            }),
+                            ...hierarchicalResult.unmatched_b.map((name, idx) => {
+                              const unit = hierarchicalResult.units2?.find(u => u.name === name);
+                              return {
+                                key: `b-${idx}`,
+                                name,
+                                source: 'B',
+                                lines: unit?.lineCount || 0
+                              };
+                            })
+                          ]}
+                          columns={[
+                            {
+                              title: '单元名称',
+                              dataIndex: 'name',
+                              key: 'name'
+                            },
+                            {
+                              title: '来源',
+                              dataIndex: 'source',
+                              key: 'source',
+                              width: 100,
+                              align: 'center' as const,
+                              render: (source: string) => (
+                                <Tag color={source === 'A' ? 'red' : 'green'} style={{ margin: 0, fontSize: 11 }}>
+                                  代码{source}
+                                </Tag>
+                              )
+                            },
+                            {
+                              title: '行数',
+                              dataIndex: 'lines',
+                              key: 'lines',
+                              width: 80,
+                              align: 'center' as const
+                            },
+                            {
+                              title: '贡献',
+                              dataIndex: 'lines',
+                              key: 'contribution',
+                              width: 150,
+                              align: 'right' as const,
+                              render: (lines: number) => (
+                                <span style={{ 
+                                  fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+                                  fontSize: 11,
+                                  color: '#999'
+                                }}>
+                                  0 × {lines} = 0.00
+                                </span>
+                              )
+                            }
+                          ]}
+                          pagination={false}
+                          size="small"
+                          bordered
+                          summary={() => (
+                            <Table.Summary fixed>
+                              <Table.Summary.Row style={{ background: 'linear-gradient(180deg, #fff1f0 0%, #ffccc7 100%)' }}>
+                                <Table.Summary.Cell index={0} colSpan={3} align="right">
+                                  <span style={{ fontWeight: 600, fontSize: 13, color: '#cf1322' }}>
+                                    未匹配单元总贡献：
+                                  </span>
+                                </Table.Summary.Cell>
+                                <Table.Summary.Cell index={1} align="right">
+                                  <span style={{ 
+                                    fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+                                    fontSize: 14,
+                                    fontWeight: 700,
+                                    color: '#cf1322'
+                                  }}>
+                                    0.00
+                                  </span>
+                                </Table.Summary.Cell>
+                              </Table.Summary.Row>
+                            </Table.Summary>
+                          )}
+                        />
+                      </div>
+                    )}
+
+                    {/* 最终计算 */}
+                    <div style={{ 
+                      background: 'linear-gradient(135deg, #e6f7ff 0%, #bae7ff 100%)', 
+                      padding: 24, 
+                      borderRadius: 8,
+                      border: '3px solid #1890ff',
+                      boxShadow: '0 4px 12px rgba(24, 144, 255, 0.15)'
+                    }}>
+                      <div style={{ 
+                        fontWeight: 700, 
+                        fontSize: 16, 
+                        marginBottom: 16, 
+                        color: '#0050b3',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8
+                      }}>
+                        <span style={{ fontSize: 20 }}>🧮</span>
+                        最终计算
+                      </div>
+                      <div style={{ 
+                        fontFamily: 'Menlo, Monaco, "Courier New", monospace', 
+                        fontSize: 14, 
+                        lineHeight: 2,
+                        background: '#fff',
+                        padding: 16,
+                        borderRadius: 4,
+                        border: '1px solid #91d5ff'
+                      }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ color: '#595959' }}>总加权相似度</span>
+                          <span style={{ fontWeight: 600, color: '#1890ff', fontSize: 15 }}>
+                            {hierarchicalResult.matches.reduce((sum, m) => sum + m.similarity * m.weight, 0).toFixed(2)}
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ color: '#595959' }}>总权重</span>
+                          <span style={{ fontWeight: 600, color: '#1890ff', fontSize: 15 }}>
+                            {hierarchicalResult.total_weight?.toFixed(1) || 'N/A'}
+                          </span>
+                        </div>
+                        <div style={{ 
+                          marginTop: 12, 
+                          paddingTop: 12, 
+                          borderTop: '2px solid #1890ff',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          background: 'linear-gradient(90deg, #f0f9ff 0%, #e6f7ff 100%)',
+                          padding: '12px 16px',
+                          borderRadius: 4,
+                          marginLeft: -16,
+                          marginRight: -16,
+                          marginBottom: -16
+                        }}>
+                          <span style={{ color: '#0050b3', fontWeight: 700, fontSize: 15 }}>
+                            综合相似度
+                          </span>
+                          <span style={{ fontWeight: 700, color: '#0050b3', fontSize: 18 }}>
+                            {hierarchicalResult.matches.reduce((sum, m) => sum + m.similarity * m.weight, 0).toFixed(2)} ÷ {hierarchicalResult.total_weight?.toFixed(1) || 'N/A'} = <span style={{ fontSize: 22, color: '#1890ff' }}>{hierarchicalResult.similarity_percent.toFixed(2)}%</span>
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ 
+                    marginTop: 20, 
+                    padding: 16, 
+                    background: 'linear-gradient(135deg, #fffbe6 0%, #fff7cc 100%)', 
+                    border: '2px solid #faad14', 
+                    borderRadius: 8,
+                    boxShadow: '0 2px 8px rgba(250, 173, 20, 0.1)'
+                  }}>
+                    <div style={{ 
+                      fontWeight: 600, 
+                      fontSize: 14, 
+                      color: '#d48806',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      marginBottom: 8
+                    }}>
+                      <span style={{ fontSize: 18 }}>💡</span>
+                      为什么用加权平均？
+                    </div>
+                    <p style={{ marginTop: 8, marginBottom: 0, color: '#595959', fontSize: 13, lineHeight: 1.6 }}>
+                      因为不同的代码单元重要性不同。一个 100 行的核心函数比一个 1 行的 import 语句更重要。
+                      使用行数作为权重，可以让大的、重要的代码单元在最终相似度中占更大比例。
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* 拆分单元与匹配详情可视化 */}
+              <Divider />
+
+              {/* 拆分单元与匹配详情可视化 */}
+              <Divider />
+              <div className="step-section">
+                <div className="step-section-title">分层匹配与 DFG 可视化详情</div>
+                <div className="hierarchical-matches-list">
+                  {hierarchicalResult.matches.map((match, idx) => {
+                    const detailA = hierarchicalResult.encoding_details_a.find(d => d.name === match.unit_a);
+                    const detailB = hierarchicalResult.encoding_details_b.find(d => d.name === match.unit_b);
+                    
+                    return (
+                      <div key={idx} className="match-card">
+                        <div className="match-card-header">
+                          <span className="match-score">{match.similarity_percent.toFixed(1)}%</span>
+                          <span className="match-weight">权重: {match.weight}</span>
+                        </div>
+                        <div className="match-card-body">
+                          <div className="match-unit">
+                            <div className="unit-name">
+                              <Tag color="blue">代码A</Tag> {match.unit_a} <span className="unit-type">({match.type_a})</span>
+                              {detailA?.truncated && <Tag color="red" style={{ marginLeft: 8 }}>已截断</Tag>}
+                            </div>
+                            <div className="unit-stats">
+                              Token: {detailA?.token_count || 0} | 有效: {detailA?.effective_tokens || 0} | 行数: {detailA?.lines || 0}
+                            </div>
+                            {detailA?.dfg_string && (
+                              <div className="unit-dfg" title={detailA.dfg_string}>
+                                <strong>DFG:</strong> {detailA.dfg_string}
+                              </div>
+                            )}
+                            {hierarchicalResult.units1 && (
+                              <div className="unit-code">
+                                <pre>{hierarchicalResult.units1.find(u => u.name === match.unit_a)?.code || ''}</pre>
+                              </div>
+                            )}
+                          </div>
+                          <div className="match-arrow">↔</div>
+                          <div className="match-unit">
+                            <div className="unit-name">
+                              <Tag color="cyan">代码B</Tag> {match.unit_b} <span className="unit-type">({match.type_b})</span>
+                              {detailB?.truncated && <Tag color="red" style={{ marginLeft: 8 }}>已截断</Tag>}
+                            </div>
+                            <div className="unit-stats">
+                              Token: {detailB?.token_count || 0} | 有效: {detailB?.effective_tokens || 0} | 行数: {detailB?.lines || 0}
+                            </div>
+                            {detailB?.dfg_string && (
+                              <div className="unit-dfg" title={detailB.dfg_string}>
+                                <strong>DFG:</strong> {detailB.dfg_string}
+                              </div>
+                            )}
+                            {hierarchicalResult.units2 && (
+                              <div className="unit-code">
+                                <pre>{hierarchicalResult.units2.find(u => u.name === match.unit_b)?.code || ''}</pre>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  
+                  {/* 未匹配的单元 */}
+                  {hierarchicalResult.unmatched_a.length > 0 && (
+                    <div className="unmatched-section">
+                      <div className="unmatched-title">代码A中被删除/未匹配的单元：</div>
+                      <div className="unmatched-tags">
+                        {hierarchicalResult.unmatched_a.map(name => (
+                          <Tag color="red" key={name}>{name}</Tag>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {hierarchicalResult.unmatched_b.length > 0 && (
+                    <div className="unmatched-section">
+                      <div className="unmatched-title">代码B中新增/未匹配的单元：</div>
+                      <div className="unmatched-tags">
+                        {hierarchicalResult.unmatched_b.map(name => (
+                          <Tag color="green" key={name}>{name}</Tag>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -1082,7 +1542,7 @@ function markMovedLinesAsUnchanged(
 /**
  * 构建并排视图的数据
  */
-function buildSideBySideView(oldCode: string, newCode: string, changes: any[]) {
+function buildSideBySideView(_oldCode: string, _newCode: string, changes: any[]) {
   const leftLines: LineData[] = [];
   const rightLines: LineData[] = [];
 

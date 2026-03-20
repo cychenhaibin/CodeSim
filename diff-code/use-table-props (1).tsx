@@ -1,7 +1,7 @@
 import { INIT_PAGINATION } from '@ssc-fe-common/const';
 import { $gt } from '@ssc-fe-common/context';
 import { useForm } from '@ssc-fe-common/hooks';
-import type { ExtendColumnProps, FieldType } from '@ssc-fe-common/types';
+import type { FieldType,ExtendColumnProps } from '@ssc-fe-common/types';
 import React, { useMemo, useState } from 'react';
 import { ProTable } from 'react-pro-components';
 import type { ProTableProps } from 'react-pro-components/typings/components/pro-table/types';

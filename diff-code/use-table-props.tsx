@@ -5,7 +5,6 @@ import type { ExtendColumnProps, FieldType } from '@ssc-fe-common/types';
 import React, { useMemo, useState } from 'react';
 import { ProTable } from 'react-pro-components';
 import type { ProTableProps } from 'react-pro-components/typings/components/pro-table/types';
-import { useHistory } from 'react-router-dom';
 import { Button } from 'ssc-ui-react';
 import { SorterValue } from 'ssc-ui-react/typings/components/table/types';
 

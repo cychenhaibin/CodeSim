@@ -31,7 +31,7 @@ const DEFAULT_OPTIONS: NormalizeOptions = {
  */
 export function normalizeCode(
   code: string,
-  language: string = 'javascript',
+  _language: string = 'javascript',
   options: Partial<NormalizeOptions> = {}
 ): string {
   const opts = { ...DEFAULT_OPTIONS, ...options };
