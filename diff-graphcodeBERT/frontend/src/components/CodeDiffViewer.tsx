@@ -1,13 +1,11 @@
 // ========================================================================
 // components/CodeDiffViewer.tsx
-// 代码对比视图组件 - AST + GraphCodeBERT 版本
+// 代码对比视图组件 - GraphCodeBERT 版本
 // ========================================================================
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { diffLines, Change } from 'diff';
-import { DiffResult } from '../utils/ASTDiffAnalyzer';
-import { Drawer, Button, Tag, Steps, Divider, Spin, Tooltip, Table } from 'antd';
-import { CaretUpOutlined, CaretDownOutlined } from '@ant-design/icons';
+import { Drawer, Button, Tag, Steps, Divider, Tooltip, Table } from 'antd';
 import './CodeDiffViewer.css';
 
 /**
@@ -42,8 +40,7 @@ interface CodeDiffViewerProps {
   newCode: string;
   oldFileName: string;
   newFileName: string;
-  diffResult: DiffResult;
-  hierarchicalResult: HierarchicalCompareResponse | null;
+  hierarchicalResult: HierarchicalCompareResponse;
   onBack?: () => void;
 }
 
@@ -54,26 +51,29 @@ const CodeDiffViewer: React.FC<CodeDiffViewerProps> = ({
   oldCode,
   newCode,
   oldFileName,
-  diffResult,
   hierarchicalResult,
   onBack,
 }) => {
-  // 折叠状态
-  const [collapsed, setCollapsed] = useState(false);
-  // 当前打开的详情面板: null | 'ast-structure' | 'semantic'
+  // 当前打开的详情面板: null | 'semantic'
   const [detailPanel, setDetailPanel] = useState<string | null>(null);
 
-  // 处理行级变化
-  const expandedChanges = useMemo(
-    () => expandLineChanges(diffResult.lineChanges),
-    [diffResult]
+  // 处理行级变化（使用 diffLines 生成基础的文本 diff）
+  const lineChanges = useMemo(
+    () => diffLines(oldCode, newCode),
+    [oldCode, newCode]
   );
   
-  // 构建左右两侧的显示数据
+  const expandedChanges = useMemo(
+    () => expandLineChanges(lineChanges),
+    [lineChanges]
+  );
+  
+  // 构建左右两侧的显示数据（注入语义信息）
   const { leftLines, rightLines } = buildSideBySideView(
     oldCode,
     newCode,
-    expandedChanges
+    expandedChanges,
+    hierarchicalResult
   );
 
   // 滚动同步功能
@@ -110,17 +110,7 @@ const CodeDiffViewer: React.FC<CodeDiffViewerProps> = ({
       left.removeEventListener('scroll', syncFromLeft);
       right.removeEventListener('scroll', syncFromRight);
     };
-  }, [diffResult]);
-
-  // 加载状态
-  if (!diffResult) {
-    return (
-      <div className="loading">
-        <Spin size="large" />
-        <span style={{ marginLeft: 12 }}>分析中...</span>
-      </div>
-    );
-  }
+  }, []);
 
   return (
     <div className="code-diff-viewer">
@@ -142,134 +132,161 @@ const CodeDiffViewer: React.FC<CodeDiffViewerProps> = ({
           <span className="label">文件路径:</span>
           <span className="file-path">{oldFileName}</span>
         </div>
-        
-        {/* 行级统计 */}
-        <div className="file-info ast-structure-row">
-          <span className="stats">
-            相同行 / 总行:{' '}
-            {diffResult.statistics.totalLines - diffResult.statistics.modifiedLines} /{' '}
-            {diffResult.statistics.totalLines} ({diffResult.statistics.similarity.toFixed(2)}%)
-          </span>
-        </div>
-        
-        {/* AST 结构相似度（前端计算） */}
-        <div className="file-info ast-structure-row">
-          <Tooltip title="前端 Babel 解析 AST → 提取结构签名 → 多重集比较">
-            <span className="label">AST 结构相似度:</span>
+
+        {/* 综合语义相似度（函数级分层编码） */}
+        <div className="file-info model-similarity-row">
+          <Tooltip title="将代码拆分为小单元，提取DFG数据流图，使用 GraphCodeBERT 独立编码并进行匈牙利算法最优匹配">
+            <span className="label">语义相似度:</span>
           </Tooltip>
-          <span className="ast-similarity-value">{diffResult.astStructureSimilarity.toFixed(2)}%</span>
-          <Button size="small" className="detail-btn" onClick={() => setDetailPanel('ast-structure')}>
+          <span className={`ast-vector-value ${hierarchicalResult.similarity >= 0.85 ? 'high' : hierarchicalResult.similarity >= 0.5 ? 'medium' : 'low'}`}>
+            {hierarchicalResult.similarity_percent.toFixed(2)}%
+          </span>
+          <Tag color="blue" style={{ marginLeft: 8, fontSize: 11 }}>
+            {hierarchicalResult.matches.length} 对匹配
+          </Tag>
+          <Button size="small" className="detail-btn" onClick={() => setDetailPanel('semantic')}>
             计算详情
           </Button>
         </div>
-
-        {/* 综合语义相似度（函数级分层编码） */}
-        {hierarchicalResult && (
-          <div className="file-info model-similarity-row">
-            <Tooltip title="将代码拆分为小单元，提取DFG数据流图，使用 GraphCodeBERT 独立编码并进行匈牙利算法最优匹配">
-              <span className="label">综合语义相似度:</span>
-            </Tooltip>
-            <span className={`ast-vector-value ${hierarchicalResult.similarity >= 0.85 ? 'high' : hierarchicalResult.similarity >= 0.5 ? 'medium' : 'low'}`}>
-              {hierarchicalResult.similarity_percent.toFixed(2)}%
-            </span>
-            <Tag color="blue" style={{ marginLeft: 8, fontSize: 11 }}>
-              {hierarchicalResult.matches.length} 对匹配
-            </Tag>
-            <Button size="small" className="detail-btn" onClick={() => setDetailPanel('semantic')}>
-              计算详情
-            </Button>
-          </div>
-        )}
       </div>
-
-      {/* 可折叠的差异详情区域 */}
-      {(diffResult.astStructureChanges.length > 0 || diffResult.astChanges.length > 0) && (
-        <div className={`collapsible-content ${collapsed ? 'collapsed' : 'expanded'}`}>
-          {/* AST 树结构差异列表 */}
-          {diffResult.astStructureChanges.length > 0 && (
-            <div className="diff-details ast-structure-details">
-              <Divider style={{ margin: '8px 0' }} />
-              <div className="details-title">AST 树结构差异</div>
-              <ol className="changes-list">
-                {diffResult.astStructureChanges.slice(0, 10).map((change, index) => (
-                  <li key={index} className={`change-item ast-structure ${change.type}`}>
-                    <Tag color={change.type === 'removed' ? 'red' : change.type === 'added' ? 'green' : 'orange'} style={{ marginRight: 6 }}>
-                      {change.type === 'removed' ? '移除' : change.type === 'added' ? '新增' : '替换'}
-                    </Tag>
-                    <span className="change-description">{change.description}</span>
-                  </li>
-                ))}
-              </ol>
-            </div>
-          )}
-
-          {/* 语义差异详情 */}
-          {diffResult.astChanges.length > 0 && (
-            <div className="diff-details">
-              <Divider style={{ margin: '8px 0' }} />
-              <div className="details-title">差异详情（导入/函数/类等）</div>
-              <ol className="changes-list">
-                {diffResult.astChanges.slice(0, 5).map((change, index) => (
-                  <li key={index} className={`change-item ${change.severity}`}>
-                    <Tag color={change.type === 'removed' ? 'red' : change.type === 'added' ? 'green' : 'orange'} style={{ marginRight: 6 }}>
-                      {getChangeTypeLabel(change.type)}
-                    </Tag>
-                    <span className="change-description">{change.description}</span>
-                  </li>
-                ))}
-              </ol>
-            </div>
-          )}
-        </div>
-      )}
 
       {/* 并排代码对比区域 */}
       <div className="diff-container">
-        {/* 折叠按钮 */}
-        {(diffResult.astStructureChanges.length > 0 || diffResult.astChanges.length > 0) && (
-          <div className="collapse-bar-wrapper">
-            <Button
-              type="default"
-              size="small"
-              className="collapse-bar-btn"
-              icon={collapsed ? <CaretDownOutlined /> : <CaretUpOutlined />}
-              onClick={() => setCollapsed(!collapsed)}
-            >
-              {collapsed ? '展开差异详情' : '收起差异详情'}
-            </Button>
-          </div>
-        )}
         {/* 左侧面板：旧代码 */}
         <div ref={leftPaneRef} className="diff-pane left-pane">
           <div className="pane-content">
-            {leftLines.map((line, index) => (
-              <div
-                key={index}
-                className={`code-line ${line.type}`}
-                data-line-number={line.lineNumber}
-              >
-                <span className="line-number">{line.lineNumber || ''}</span>
-                <span className="line-marker">{line.marker}</span>
-                <pre className="line-content">{line.content}</pre>
-              </div>
-            ))}
+            {leftLines.map((line, index) => {
+              const semantic = line.semantic;
+              const isUnitStart = semantic && line.lineNumber === semantic.startLine;
+              
+              // 🆕 使用后端返回的精确行级差异信息
+              let displayType = line.type;
+              let showMarker = true;
+              
+              if (semantic && line.lineNumber) {
+                // 如果这一行是"仅文本差异"（语义等价），不显示高亮
+                if (semantic.isTextOnlyDiff) {
+                  displayType = 'normal';
+                  showMarker = false;
+                }
+                // 如果这一行有真正的语义差异，保持高亮
+                else if (semantic.hasSemanticDiff) {
+                  // 保持原有的 added/removed 类型
+                }
+                // 如果单元整体语义等价（≥95%）且该行没有被标记为差异，隐藏高亮
+                else if (semantic.status === 'equivalent' && (line.type === 'added' || line.type === 'removed')) {
+                  displayType = 'normal';
+                  showMarker = false;
+                }
+              } else if (!semantic && line.lineNumber && hierarchicalResult) {
+                // 🆕 如果这一行没有语义信息（不属于任何单元），但整体相似度很高
+                // 说明这可能是 export default 等简单语句，应该弱化高亮
+                if (hierarchicalResult.similarity >= 0.95 && (line.type === 'added' || line.type === 'removed')) {
+                  displayType = 'normal';
+                  showMarker = false;
+                }
+              }
+              
+              let className = `code-line ${displayType}`;
+              if (semantic && line.type !== 'normal' && line.type !== 'empty') {
+                className += ` semantic-${semantic.status}`;
+              }
+              
+              return (
+                <React.Fragment key={index}>
+                  {isUnitStart && (
+                    <div className="semantic-unit-header">
+                      <span className="unit-name">{semantic.unitName}</span>
+                      {semantic.matchedUnit && (
+                        <Tag color={getSemanticColor(semantic.status)} className="semantic-tag">
+                          {(semantic.similarity * 100).toFixed(1)}% ↔ {semantic.matchedUnit}
+                        </Tag>
+                      )}
+                      {!semantic.matchedUnit && (
+                        <Tag color="default" className="semantic-tag">未匹配</Tag>
+                      )}
+                    </div>
+                  )}
+                  <div
+                    className={className}
+                    data-line-number={line.lineNumber}
+                  >
+                    <span className="line-number">{line.lineNumber || ''}</span>
+                    <span className="line-marker">{showMarker ? line.marker : ''}</span>
+                    <pre className="line-content">{line.content}</pre>
+                  </div>
+                </React.Fragment>
+              );
+            })}
           </div>
         </div>
 
         {/* 右侧面板：新代码 */}
         <div ref={rightPaneRef} className="diff-pane right-pane">
           <div className="pane-content">
-            {rightLines.map((line, index) => (
-              <div
-                key={index}
-                className={`code-line ${line.type}`}
-                data-line-number={line.lineNumber}
-              >
-                <span className="line-number">{line.lineNumber || ''}</span>
-                <span className="line-marker">{line.marker}</span>
-                <pre className="line-content">{line.content}</pre>
-              </div>
-            ))}
+            {rightLines.map((line, index) => {
+              const semantic = line.semantic;
+              const isUnitStart = semantic && line.lineNumber === semantic.startLine;
+              
+              // 🆕 使用后端返回的精确行级差异信息
+              let displayType = line.type;
+              let showMarker = true;
+              
+              if (semantic && line.lineNumber) {
+                // 如果这一行是"仅文本差异"（语义等价），不显示高亮
+                if (semantic.isTextOnlyDiff) {
+                  displayType = 'normal';
+                  showMarker = false;
+                }
+                // 如果这一行有真正的语义差异，保持高亮
+                else if (semantic.hasSemanticDiff) {
+                  // 保持原有的 added/removed 类型
+                }
+                // 如果单元整体语义等价（≥95%）且该行没有被标记为差异，隐藏高亮
+                else if (semantic.status === 'equivalent' && (line.type === 'added' || line.type === 'removed')) {
+                  displayType = 'normal';
+                  showMarker = false;
+                }
+              } else if (!semantic && line.lineNumber && hierarchicalResult) {
+                // 🆕 如果这一行没有语义信息（不属于任何单元），但整体相似度很高
+                // 说明这可能是 export default 等简单语句，应该弱化高亮
+                if (hierarchicalResult.similarity >= 0.95 && (line.type === 'added' || line.type === 'removed')) {
+                  displayType = 'normal';
+                  showMarker = false;
+                }
+              }
+              
+              let className = `code-line ${displayType}`;
+              if (semantic && line.type !== 'normal' && line.type !== 'empty') {
+                className += ` semantic-${semantic.status}`;
+              }
+              
+              return (
+                <React.Fragment key={index}>
+                  {isUnitStart && (
+                    <div className="semantic-unit-header">
+                      <span className="unit-name">{semantic.unitName}</span>
+                      {semantic.matchedUnit && (
+                        <Tag color={getSemanticColor(semantic.status)} className="semantic-tag">
+                          {semantic.matchedUnit} ↔ {(semantic.similarity * 100).toFixed(1)}%
+                        </Tag>
+                      )}
+                      {!semantic.matchedUnit && (
+                        <Tag color="default" className="semantic-tag">未匹配</Tag>
+                      )}
+                    </div>
+                  )}
+                  <div
+                    className={className}
+                    data-line-number={line.lineNumber}
+                  >
+                    <span className="line-number">{line.lineNumber || ''}</span>
+                    <span className="line-marker">{showMarker ? line.marker : ''}</span>
+                    <pre className="line-content">{line.content}</pre>
+                  </div>
+                </React.Fragment>
+              );
+            })}
           </div>
         </div>
       </div>
@@ -280,105 +297,13 @@ const CodeDiffViewer: React.FC<CodeDiffViewerProps> = ({
         placement="right"
         width={880}
         className="detail-drawer"
-        title={
-          detailPanel === 'ast-structure'
-            ? 'AST 结构相似度 — 计算过程'
-            : '综合语义相似度 — 计算过程'
-        }
+        title="语义相似度 — 计算过程"
         onClose={() => setDetailPanel(null)}
         maskClosable
         closable
       >
-        {/* ---------- AST 结构相似度 ---------- */}
-        {detailPanel === 'ast-structure' && (
-          <div className="drawer-detail-panel">
-            <Steps
-              current={2}
-              size="small"
-              className="drawer-h-steps"
-              labelPlacement="vertical"
-              items={[
-                { title: '前端 Babel AST 解析', status: 'finish' },
-                { title: '结构签名提取', status: 'finish' },
-                { title: '多重集签名比较', status: 'finish' },
-              ]}
-            />
-            <div className="drawer-step-content">
-              <div className="step-section">
-                <div className="step-section-title">步骤 1: 前端 Babel AST 解析</div>
-                <div className="step-desc-block">
-                  <p>使用 @babel/parser 将两份代码解析为 AST 抽象语法树。</p>
-                </div>
-              </div>
-              <Divider />
-              <div className="step-section">
-                <div className="step-section-title">步骤 2: 结构签名提取</div>
-                <div className="step-desc-block">
-                  <p>
-                    遍历 AST，只提取影响功能的核心结构节点，生成归一化签名。
-                    功能等价的不同写法统一为相同签名:
-                  </p>
-                  <ul className="step-equiv-list">
-                    <li>function / 箭头函数 → <code>Function</code></li>
-                    <li>if-else / 三元表达式 → <code>Conditional</code></li>
-                    <li>for / while / forEach / map → <code>Loop</code></li>
-                  </ul>
-                  <p>忽略样式属性、变量名、字面量值。</p>
-                  <div className="step-data">
-                    代码A 提取签名数: <strong>{diffResult.astStructureDebug.oldSignatureCount}</strong>{' | '}
-                    代码B 提取签名数: <strong>{diffResult.astStructureDebug.newSignatureCount}</strong>
-                  </div>
-                </div>
-              </div>
-              <Divider />
-              <div className="step-section">
-                <div className="step-section-title">步骤 3: 多重集签名比较</div>
-                <div className="step-desc-block">
-                  <p>
-                    将两份代码的结构签名按类型逐一比较（忽略顺序）。
-                    对每种签名类型，匹配数取两边的较小值，总数取两边的较大值，最后汇总:
-                  </p>
-                  <div className="step-formula">
-                    相似度 = 各类型匹配数之和 / 各类型较大值之和 × 100%
-                  </div>
-                  <div className="step-data">
-                    匹配数之和: <strong>{diffResult.astStructureDebug.matchedCount}</strong>{' | '}
-                    较大值之和: <strong>{diffResult.astStructureDebug.totalCount}</strong>
-                  </div>
-                  <div className="step-formula">
-                    {diffResult.astStructureDebug.matchedCount} / {diffResult.astStructureDebug.totalCount} × 100% = {diffResult.astStructureSimilarity.toFixed(2)}%
-                  </div>
-                  <div className="step-result">
-                    <span className="result-label">最终得分</span>
-                    <Tag color="blue" style={{ fontSize: 16, fontWeight: 700, padding: '2px 12px' }}>
-                      {diffResult.astStructureSimilarity.toFixed(2)}%
-                    </Tag>
-                  </div>
-                </div>
-              </div>
-              {diffResult.astStructureChanges.length > 0 && (
-                <>
-                  <Divider />
-                  <div className="drawer-diff-section">
-                    <div className="drawer-diff-title">
-                      检测到的结构差异（{diffResult.astStructureChanges.length} 项）
-                    </div>
-                    <ul className="step-list">
-                      {diffResult.astStructureChanges.slice(0, 20).map((c, i) => (
-                        <li key={i} className={c.type === 'added' ? 'item-added' : 'item-removed'}>
-                          {c.description}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-        )}
-
         {/* ---------- 综合语义相似度 ---------- */}
-        {detailPanel === 'semantic' && hierarchicalResult && (
+        {detailPanel === 'semantic' && (
           <div className="drawer-detail-panel">
             <Steps
               current={3}
@@ -1128,6 +1053,115 @@ interface LineData {
   content: string;
   type: 'normal' | 'added' | 'removed' | 'empty';
   marker: string;
+  semantic?: SemanticInfo;
+}
+
+interface SemanticInfo {
+  unitName: string;
+  unitType: string;
+  similarity: number;
+  matchedUnit: string | null;
+  status: 'equivalent' | 'similar' | 'different' | 'unmatched';
+  startLine: number;
+  endLine: number;
+  hasSemanticDiff: boolean;
+  isTextOnlyDiff: boolean;
+}
+
+/**
+ * 构建行号到语义信息的映射
+ * 将后端的单元匹配结果和行级差异信息映射回原代码的每一行
+ */
+function buildLineToSemanticMap(
+  units: Array<{ name: string; type: string; startLine: number; endLine: number; lineCount: number }>,
+  matches: Array<{ 
+    unit_a: string; 
+    unit_b: string; 
+    similarity: number;
+    line_diff?: {
+      semantic_diff_lines_a: number[];
+      semantic_diff_lines_b: number[];
+      text_only_diff_lines_a: number[];
+      text_only_diff_lines_b: number[];
+    }
+  }>,
+  unmatchedUnits: string[],
+  side: 'a' | 'b'
+): Map<number, SemanticInfo> {
+  const map = new Map<number, SemanticInfo>();
+  
+  const unitToMatch = new Map<string, { 
+    similarity: number; 
+    matchedUnit: string;
+    lineDiff?: any;
+  }>();
+  
+  matches.forEach(match => {
+    if (side === 'a') {
+      unitToMatch.set(match.unit_a, { 
+        similarity: match.similarity, 
+        matchedUnit: match.unit_b,
+        lineDiff: match.line_diff,
+      });
+    } else {
+      unitToMatch.set(match.unit_b, { 
+        similarity: match.similarity, 
+        matchedUnit: match.unit_a,
+        lineDiff: match.line_diff,
+      });
+    }
+  });
+  
+  units.forEach(unit => {
+    const matchInfo = unitToMatch.get(unit.name);
+    const isUnmatched = unmatchedUnits.includes(unit.name);
+    
+    let status: SemanticInfo['status'];
+    let similarity = 0;
+    let matchedUnit: string | null = null;
+    
+    if (isUnmatched) {
+      status = 'unmatched';
+    } else if (matchInfo) {
+      similarity = matchInfo.similarity;
+      matchedUnit = matchInfo.matchedUnit;
+      
+      if (similarity >= 0.95) status = 'equivalent';
+      else if (similarity >= 0.7) status = 'similar';
+      else status = 'different';
+    } else {
+      status = 'unmatched';
+    }
+    
+    // 构建行级差异集合（用于快速查询）
+    const semanticDiffLines = new Set<number>(
+      side === 'a' 
+        ? (matchInfo?.lineDiff?.semantic_diff_lines_a || [])
+        : (matchInfo?.lineDiff?.semantic_diff_lines_b || [])
+    );
+    
+    const textOnlyDiffLines = new Set<number>(
+      side === 'a'
+        ? (matchInfo?.lineDiff?.text_only_diff_lines_a || [])
+        : (matchInfo?.lineDiff?.text_only_diff_lines_b || [])
+    );
+    
+    for (let line = unit.startLine; line <= unit.endLine; line++) {
+      map.set(line, {
+        unitName: unit.name,
+        unitType: unit.type,
+        similarity,
+        matchedUnit,
+        status,
+        startLine: unit.startLine,
+        endLine: unit.endLine,
+        hasSemanticDiff: semanticDiffLines.has(line),
+        isTextOnlyDiff: textOnlyDiffLines.has(line),
+      });
+    }
+  });
+  
+  return map;
 }
 
 const normalizeLine = (s: string) => {
@@ -1542,16 +1576,40 @@ function markMovedLinesAsUnchanged(
 /**
  * 构建并排视图的数据
  */
-function buildSideBySideView(_oldCode: string, _newCode: string, changes: any[]) {
+function buildSideBySideView(
+  _oldCode: string,
+  _newCode: string,
+  changes: any[],
+  hierarchicalResult?: HierarchicalCompareResponse | null
+) {
   const leftLines: LineData[] = [];
   const rightLines: LineData[] = [];
 
   let oldLineNum = 1;
   let newLineNum = 1;
 
+  // 构建语义映射表
+  const leftSemanticMap = hierarchicalResult?.units1
+    ? buildLineToSemanticMap(
+        hierarchicalResult.units1,
+        hierarchicalResult.matches,
+        hierarchicalResult.unmatched_a,
+        'a'
+      )
+    : new Map();
+
+  const rightSemanticMap = hierarchicalResult?.units2
+    ? buildLineToSemanticMap(
+        hierarchicalResult.units2,
+        hierarchicalResult.matches,
+        hierarchicalResult.unmatched_b,
+        'b'
+      )
+    : new Map();
+
   for (const change of changes) {
     const lines = change.value.split('\n');
-    
+
     if (lines[lines.length - 1] === '') {
       lines.pop();
     }
@@ -1559,10 +1617,11 @@ function buildSideBySideView(_oldCode: string, _newCode: string, changes: any[])
     if (change.removed) {
       for (const line of lines) {
         leftLines.push({
-          lineNumber: oldLineNum++,
+          lineNumber: oldLineNum,
           content: line,
           type: 'removed',
           marker: '-',
+          semantic: leftSemanticMap.get(oldLineNum),
         });
         rightLines.push({
           lineNumber: null,
@@ -1570,6 +1629,7 @@ function buildSideBySideView(_oldCode: string, _newCode: string, changes: any[])
           type: 'empty',
           marker: '',
         });
+        oldLineNum++;
       }
     } else if (change.added) {
       for (const line of lines) {
@@ -1580,42 +1640,49 @@ function buildSideBySideView(_oldCode: string, _newCode: string, changes: any[])
           marker: '',
         });
         rightLines.push({
-          lineNumber: newLineNum++,
+          lineNumber: newLineNum,
           content: line,
           type: 'added',
           marker: '+',
+          semantic: rightSemanticMap.get(newLineNum),
         });
+        newLineNum++;
       }
     } else {
       for (const line of lines) {
         leftLines.push({
-          lineNumber: oldLineNum++,
+          lineNumber: oldLineNum,
           content: line,
           type: 'normal',
           marker: '',
+          semantic: leftSemanticMap.get(oldLineNum),
         });
         rightLines.push({
-          lineNumber: newLineNum++,
+          lineNumber: newLineNum,
           content: line,
           type: 'normal',
           marker: '',
+          semantic: rightSemanticMap.get(newLineNum),
         });
+        oldLineNum++;
+        newLineNum++;
       }
     }
   }
 
   markMovedLinesAsUnchanged(leftLines, rightLines);
-  
+
   return { leftLines, rightLines };
 }
 
-function getChangeTypeLabel(type: string): string {
-  const labels: Record<string, string> = {
-    added: '新增',
-    removed: '移除',
-    modified: '修改',
+function getSemanticColor(status: SemanticInfo['status']): string {
+  const colors: Record<SemanticInfo['status'], string> = {
+    equivalent: 'green',
+    similar: 'blue',
+    different: 'orange',
+    unmatched: 'default',
   };
-  return labels[type] || type;
+  return colors[status];
 }
 
 export default CodeDiffViewer;

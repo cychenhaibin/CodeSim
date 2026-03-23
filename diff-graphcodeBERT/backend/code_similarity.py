@@ -1360,6 +1360,14 @@ class CodeSimilarityDetector:
                     continue
                 
                 weight = (units1[r]["lineCount"] + units2[c]["lineCount"]) / 2.0
+                
+                # 🆕 对匹配的单元进行逐行语义差异检测
+                line_diff_info = None
+                if sim >= 0.7:  # 只对相似度 ≥70% 的单元做行级分析
+                    line_diff_info = self._detect_line_level_semantic_diff(
+                        units1[r], units2[c], lang
+                    )
+                
                 matches.append({
                     "unit_a": units1[r]["name"],
                     "type_a": units1[r]["type"],
@@ -1370,6 +1378,7 @@ class CodeSimilarityDetector:
                     "similarity": round(sim, 4),
                     "similarity_percent": round(sim * 100, 2),
                     "weight": round(weight, 1),
+                    "line_diff": line_diff_info,  # 🆕 行级差异信息
                 })
                 total_weighted_sim += sim * weight
                 total_weight += weight
@@ -1412,6 +1421,134 @@ class CodeSimilarityDetector:
             "unit_names_b": [u["name"] for u in units2],
             "interpretation": interpretation,
         }
+
+    def _detect_line_level_semantic_diff(
+        self,
+        unit_a: Dict[str, Any],
+        unit_b: Dict[str, Any],
+        lang: str
+    ) -> Dict[str, Any]:
+        """
+        检测两个匹配单元之间的行级语义差异
+        
+        策略：
+        1. 对两个单元的代码进行逐行对齐（使用文本 diff）
+        2. 对于对齐的行对，使用语义归一化判断是否为真正的语义差异
+        3. 返回有真正语义差异的行号列表
+        
+        Returns:
+            {
+                "semantic_diff_lines_a": [行号列表],  # 代码A中有语义差异的行
+                "semantic_diff_lines_b": [行号列表],  # 代码B中有语义差异的行
+                "text_only_diff_lines_a": [行号列表], # 仅文本差异的行（语义等价）
+                "text_only_diff_lines_b": [行号列表],
+            }
+        """
+        from difflib import SequenceMatcher
+        
+        code_a = unit_a["code"]
+        code_b = unit_b["code"]
+        start_line_a = unit_a.get("startLine", 1)
+        start_line_b = unit_b.get("startLine", 1)
+        
+        lines_a = code_a.split('\n')
+        lines_b = code_b.split('\n')
+        
+        # 使用 SequenceMatcher 进行行对齐
+        matcher = SequenceMatcher(None, lines_a, lines_b)
+        
+        semantic_diff_lines_a = []
+        semantic_diff_lines_b = []
+        text_only_diff_lines_a = []
+        text_only_diff_lines_b = []
+        
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+            if tag == 'equal':
+                continue
+            elif tag == 'replace':
+                # 对替换的行进行语义归一化对比
+                # 处理一对一替换的情况
+                len_a = i2 - i1
+                len_b = j2 - j1
+                
+                if len_a == len_b:
+                    # 行数相同，逐行对比
+                    for offset in range(len_a):
+                        idx_a = i1 + offset
+                        idx_b = j1 + offset
+                        
+                        line_a_normalized = self._normalize_code_for_semantic(lines_a[idx_a], lang)
+                        line_b_normalized = self._normalize_code_for_semantic(lines_b[idx_b], lang)
+                        
+                        if line_a_normalized != line_b_normalized:
+                            # 真正的语义差异
+                            semantic_diff_lines_a.append(start_line_a + idx_a)
+                            semantic_diff_lines_b.append(start_line_b + idx_b)
+                        else:
+                            # 仅文本差异（如变量名不同）
+                            text_only_diff_lines_a.append(start_line_a + idx_a)
+                            text_only_diff_lines_b.append(start_line_b + idx_b)
+                else:
+                    # 行数不同，视为语义差异
+                    for idx_a in range(i1, i2):
+                        semantic_diff_lines_a.append(start_line_a + idx_a)
+                    for idx_b in range(j1, j2):
+                        semantic_diff_lines_b.append(start_line_b + idx_b)
+            elif tag == 'delete':
+                # 删除的行视为语义差异
+                for idx_a in range(i1, i2):
+                    semantic_diff_lines_a.append(start_line_a + idx_a)
+            elif tag == 'insert':
+                # 插入的行视为语义差异
+                for idx_b in range(j1, j2):
+                    semantic_diff_lines_b.append(start_line_b + idx_b)
+        
+        return {
+            "semantic_diff_lines_a": semantic_diff_lines_a,
+            "semantic_diff_lines_b": semantic_diff_lines_b,
+            "text_only_diff_lines_a": text_only_diff_lines_a,
+            "text_only_diff_lines_b": text_only_diff_lines_b,
+        }
+    
+    @staticmethod
+    def _normalize_code_for_semantic(line: str, lang: str) -> str:
+        """
+        对单行代码进行语义归一化
+        移除：注释、空格、变量名差异
+        保留：关键字、操作符、字面量、结构
+        """
+        import re
+        
+        # 移除注释
+        if lang in ['javascript', 'typescript', 'tsx']:
+            line = re.sub(r'//.*$', '', line)  # 单行注释
+            line = re.sub(r'/\*.*?\*/', '', line)  # 多行注释
+        elif lang == 'python':
+            line = re.sub(r'#.*$', '', line)
+        
+        # 移除 console.log
+        line = re.sub(r'console\.(log|warn|error|info)\([^)]*\)', '', line)
+        
+        # 标准化空格
+        line = re.sub(r'\s+', ' ', line.strip())
+        
+        # 标准化标识符（变量名）为统一占位符
+        # 保留关键字，替换自定义标识符
+        keywords = {
+            'const', 'let', 'var', 'function', 'return', 'if', 'else', 'for', 'while',
+            'import', 'export', 'from', 'default', 'class', 'extends', 'new',
+            'true', 'false', 'null', 'undefined', 'typeof', 'instanceof',
+        }
+        
+        tokens = re.findall(r'\b\w+\b|[^\w\s]', line)
+        normalized_tokens = []
+        for token in tokens:
+            if token in keywords or not token.isidentifier():
+                normalized_tokens.append(token)
+            else:
+                normalized_tokens.append('VAR')  # 统一的变量占位符
+        
+        return ''.join(normalized_tokens)
 
     @staticmethod
     def _get_hierarchical_interpretation(similarity: float, matched: int, unmatched_a: int, unmatched_b: int) -> str:

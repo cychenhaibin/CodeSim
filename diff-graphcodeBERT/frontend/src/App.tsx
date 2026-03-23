@@ -1,5 +1,4 @@
-import React, { useState, useMemo } from 'react';
-import { ASTDiffAnalyzer, DiffResult } from './utils/ASTDiffAnalyzer';
+import React, { useState } from 'react';
 import CodeDiffViewer from './components/CodeDiffViewer';
 import { Button, Alert, Spin, Upload } from 'antd';
 import { SyncOutlined, UploadOutlined, CodeOutlined, FileOutlined } from '@ant-design/icons';
@@ -20,6 +19,13 @@ export interface CodeUnit {
   lineCount: number;
 }
 
+export interface LineDiffInfo {
+  semantic_diff_lines_a: number[];
+  semantic_diff_lines_b: number[];
+  text_only_diff_lines_a: number[];
+  text_only_diff_lines_b: number[];
+}
+
 export interface UnitMatchResult {
   unit_a: string;
   type_a: string;
@@ -30,6 +36,7 @@ export interface UnitMatchResult {
   similarity: number;
   similarity_percent: number;
   weight: number;
+  line_diff?: LineDiffInfo;
 }
 
 export interface EncodingDetail {
@@ -65,16 +72,9 @@ const App: React.FC = () => {
   const [oldFile, setOldFile] = useState<{ name: string; content: string } | null>(null);
   const [newFile, setNewFile] = useState<{ name: string; content: string } | null>(null);
   const [loading, setLoading] = useState(false);
-  const [diffResult, setDiffResult] = useState<DiffResult | null>(null);
   const [hierarchicalResult, setHierarchicalResult] = useState<HierarchicalCompareResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [modelStatus, setModelStatus] = useState<ModelStatus | null>(null);
-
-  const analyzer = useMemo(() => {
-    const a = new ASTDiffAnalyzer();
-    a.enableDebug();
-    return a;
-  }, []);
 
   React.useEffect(() => {
     const checkModelStatus = async () => {
@@ -116,9 +116,6 @@ const App: React.FC = () => {
     setHierarchicalResult(null);
 
     try {
-      const result = analyzer.analyzeDiff(oldFile.content, newFile.content);
-      setDiffResult(result);
-
       if (modelStatus?.status === 'ready') {
         try {
           // 检测语言（根据文件扩展名）
@@ -174,7 +171,7 @@ const App: React.FC = () => {
 
       setMode('compare');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'AST 分析失败');
+      setError(err instanceof Error ? err.message : '代码比较失败');
     } finally {
       setLoading(false);
     }
@@ -183,7 +180,6 @@ const App: React.FC = () => {
   const resetFiles = () => {
     setOldFile(null);
     setNewFile(null);
-    setDiffResult(null);
     setHierarchicalResult(null);
     setMode('upload');
     setError(null);
@@ -236,8 +232,8 @@ const App: React.FC = () => {
     return (
       <div className="upload-container">
         <div className="upload-card">
-          <h1>AST + GraphCodeBERT 代码对比</h1>
-          <p className="subtitle">基于 AST 结构分析 + 深度学习语义相似度</p>
+          <h1>GraphCodeBERT 代码对比</h1>
+          <p className="subtitle">基于深度学习的代码语义相似度分析</p>
 
           <div className="upload-section">
             {renderUploadBox('old')}
@@ -261,7 +257,7 @@ const App: React.FC = () => {
               message={
                 <span>
                   <Spin size="small" style={{ marginRight: 8 }} />
-                  GraphCodeBERT 模型加载中...（可先使用 AST 分析）
+                  GraphCodeBERT 模型加载中...
                 </span>
               }
             />
@@ -284,13 +280,12 @@ const App: React.FC = () => {
 
   return (
     <div className="compare-container">
-      {oldFile && newFile && diffResult && (
+      {oldFile && newFile && hierarchicalResult && (
         <CodeDiffViewer
           oldCode={oldFile.content}
           newCode={newFile.content}
           oldFileName={oldFile.name}
           newFileName={newFile.name}
-          diffResult={diffResult}
           hierarchicalResult={hierarchicalResult}
           onBack={resetFiles}
         />

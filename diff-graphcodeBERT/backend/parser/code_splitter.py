@@ -208,6 +208,10 @@ class TreeSitterCodeSplitter:
             for child in node.children:
                 if child.type in ['function_declaration', 'class_declaration', 'lexical_declaration', 'variable_declaration']:
                     return self._extract_js_node(child, code_bytes, lines, max_chars, parent_name)
+            
+            # 处理 export default Identifier; 这种简单导出
+            # 将其作为一个独立的 'export' 类型单元
+            return self._node_to_unit(node, 'export_default', 'export', code_bytes, lines)
         
         return None
     
@@ -266,15 +270,20 @@ class TreeSitterCodeSplitter:
             # return 语句
             elif child.type == 'return_statement':
                 sub = self._node_to_unit(child, 'return_block', 'other', code_bytes, lines)
-                if sub and len(sub['code']) <= max_chars:
-                    sub['name'] = f"{name}/return_block"
-                    sub_units.append(sub)
-                elif sub:
-                    # return 语句太大，提取内部 JSX
+                if sub:
+                    # 🆕 策略调整：总是提取 JSX 子元素，不管大小
+                    # 这样可以确保两边的拆分一致性
                     jsx_units = self._extract_jsx_from_node(child, code_bytes, lines, max_chars)
-                    for jsx_unit in jsx_units:
-                        jsx_unit['name'] = f"{name}/{jsx_unit['name']}"
-                    sub_units.extend(jsx_units)
+                    
+                    if jsx_units and len(jsx_units) > 0:
+                        # 如果成功提取了 JSX 子元素，使用子元素
+                        for jsx_unit in jsx_units:
+                            jsx_unit['name'] = f"{name}/{jsx_unit['name']}"
+                        sub_units.extend(jsx_units)
+                    else:
+                        # 如果没有 JSX 子元素，使用整体 return_block
+                        sub['name'] = f"{name}/return_block"
+                        sub_units.append(sub)
         
         return sub_units
     
@@ -333,16 +342,23 @@ class TreeSitterCodeSplitter:
             # JSX 元素
             if n.type == 'jsx_element':
                 jsx_name = self._get_jsx_name(n, code_bytes)
-                unit = self._node_to_unit(n, jsx_name, 'other', code_bytes, lines)
                 
-                if unit:
-                    # 总是添加这个 JSX 元素（即使超限）
-                    jsx_units.append(unit)
-                    
-                    # 如果太大，额外提取其子元素（作为更细粒度的单元）
-                    if len(unit['code']) > max_chars:
-                        for child in n.children:
-                            find_jsx(child, current_depth + 1)
+                # 🆕 跳过 fragment（<>...</>）和 div，直接提取其子元素
+                # 这样可以确保提取到 Button、Modal 等有意义的组件
+                if jsx_name in ['jsx_element', 'div']:
+                    # 不添加 fragment/div 本身，直接提取子元素
+                    for child in n.children:
+                        find_jsx(child, current_depth + 1)
+                else:
+                    # 提取有具体名称的 JSX 元素（如 Button、Modal）
+                    unit = self._node_to_unit(n, jsx_name, 'other', code_bytes, lines)
+                    if unit:
+                        jsx_units.append(unit)
+                        
+                        # 如果太大，额外提取其子元素
+                        if len(unit['code']) > max_chars:
+                            for child in n.children:
+                                find_jsx(child, current_depth + 1)
             
             # 自闭合 JSX 元素
             elif n.type == 'jsx_self_closing_element':

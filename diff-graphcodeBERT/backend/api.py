@@ -186,6 +186,14 @@ class HierarchicalCompareRequest(BaseModel):
     lang: str = "javascript"
 
 
+class LineDiffInfo(BaseModel):
+    """行级语义差异信息"""
+    semantic_diff_lines_a: List[int] = []
+    semantic_diff_lines_b: List[int] = []
+    text_only_diff_lines_a: List[int] = []
+    text_only_diff_lines_b: List[int] = []
+
+
 class UnitMatchResult(BaseModel):
     """函数单元匹配结果"""
     unit_a: str
@@ -197,6 +205,7 @@ class UnitMatchResult(BaseModel):
     similarity: float
     similarity_percent: float
     weight: float
+    line_diff: Optional[LineDiffInfo] = None
 
 
 class EncodingDetail(BaseModel):
@@ -406,7 +415,12 @@ async def compare_hierarchical(request: HierarchicalCompareRequest):
 
         result = det.hierarchical_compare(units1_dicts, units2_dicts, request.lang)
 
-        matches = [UnitMatchResult(**m) for m in result["matches"]]
+        matches = []
+        for m in result["matches"]:
+            match_dict = {**m}
+            if m.get("line_diff"):
+                match_dict["line_diff"] = LineDiffInfo(**m["line_diff"])
+            matches.append(UnitMatchResult(**match_dict))
 
         return HierarchicalCompareResponse(
             similarity=result["similarity"],
@@ -460,6 +474,7 @@ async def split_with_treesitter(request: TreeSitterSplitRequest):
     - CST 保留所有源代码细节，不丢失任何代码
     - 节点边界精确，基于语法结构
     - 支持多种语言
+    - 🆕 对称拆分：确保两份代码使用相同的拆分粒度
     """
     try:
         from parser.code_splitter import TreeSitterCodeSplitter
@@ -467,6 +482,15 @@ async def split_with_treesitter(request: TreeSitterSplitRequest):
         splitter = TreeSitterCodeSplitter(request.lang)
         units1 = splitter.split_code(request.code1, max_chars=500)
         units2 = splitter.split_code(request.code2, max_chars=500)
+        
+        print(f"拆分前: units1={len(units1)}, units2={len(units2)}")
+        print(f"units1 名称: {[u['name'] for u in units1]}")
+        print(f"units2 名称: {[u['name'] for u in units2]}")
+        
+        # 🆕 对称拆分：检查并同步拆分粒度
+        units1, units2 = synchronize_split_granularity(units1, units2, splitter, request.lang)
+        
+        print(f"拆分后: units1={len(units1)}, units2={len(units2)}")
         
         return TreeSitterSplitResponse(
             units1=[CodeUnitResponse(**u) for u in units1],
@@ -476,6 +500,145 @@ async def split_with_treesitter(request: TreeSitterSplitRequest):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def synchronize_split_granularity(
+    units1: List[Dict],
+    units2: List[Dict],
+    splitter,
+    lang: str
+) -> tuple:
+    """
+    对称拆分：确保两份代码使用相同的拆分粒度
+    
+    简化策略：
+    1. 统计两边的拆分深度（是否有子单元）
+    2. 如果一边有子单元，另一边没有，强制拆分另一边
+    3. 使用名称前缀匹配来识别对应的父单元
+    """
+    from difflib import SequenceMatcher
+    
+    # 检查是否有子单元（名称中包含 '/'）
+    has_sub_units1 = any('/' in u['name'] for u in units1)
+    has_sub_units2 = any('/' in u['name'] for u in units2)
+    
+    print(f"拆分粒度检查: units1 有子单元={has_sub_units1}, units2 有子单元={has_sub_units2}")
+    
+    # 🆕 不再做全局的对称性检查，而是逐个单元对检查
+    # 即使两边都有子单元，也可能存在局部不对称（如 A 的 return_block 被拆分了，B 的没有）
+    
+    # 构建父单元到子单元的映射
+    def group_by_parent(units):
+        groups = {}
+        for u in units:
+            if '/' in u['name']:
+                parent = u['name'].split('/')[0]
+            else:
+                parent = u['name']
+            
+            if parent not in groups:
+                groups[parent] = []
+            groups[parent].append(u)
+        return groups
+    
+    groups1 = group_by_parent(units1)
+    groups2 = group_by_parent(units2)
+    
+    # 找到需要同步拆分的单元
+    new_units1 = []
+    new_units2 = []
+    
+    # 为每个 group1 找到最匹配的 group2
+    for parent1, group1_units in groups1.items():
+        best_match = None
+        best_score = 0
+        
+        for parent2 in groups2.keys():
+            score = SequenceMatcher(None, parent1.lower(), parent2.lower()).ratio()
+            if score > best_score:
+                best_score = score
+                best_match = parent2
+        
+        if best_match and best_score > 0.5:
+            group2_units = groups2[best_match]
+            
+            # 检查拆分不对称
+            has_sub1 = any('/' in u['name'] for u in group1_units)
+            has_sub2 = any('/' in u['name'] for u in group2_units)
+            
+            if has_sub1 and not has_sub2:
+                # group1 被拆分了，group2 没有 → 强制拆分 group2
+                print(f"强制拆分 {best_match} 以匹配 {parent1}")
+                parent_unit = [u for u in group2_units if '/' not in u['name']][0]
+                forced_units = force_split_unit(parent_unit, splitter, lang)
+                new_units2.extend(forced_units)
+                new_units1.extend(group1_units)
+                groups2.pop(best_match)  # 标记为已处理
+            elif has_sub2 and not has_sub1:
+                # group2 被拆分了，group1 没有 → 强制拆分 group1
+                print(f"强制拆分 {parent1} 以匹配 {best_match}")
+                parent_unit = [u for u in group1_units if '/' not in u['name']][0]
+                forced_units = force_split_unit(parent_unit, splitter, lang)
+                new_units1.extend(forced_units)
+                new_units2.extend(group2_units)
+                groups2.pop(best_match)  # 标记为已处理
+            else:
+                # 拆分策略一致
+                new_units1.extend(group1_units)
+                new_units2.extend(group2_units)
+                groups2.pop(best_match)  # 标记为已处理
+        else:
+            # 没有找到匹配，保留原单元
+            new_units1.extend(group1_units)
+    
+    # 添加 group2 中未处理的单元
+    for parent2, group2_units in groups2.items():
+        new_units2.extend(group2_units)
+    
+    # 按行号排序
+    new_units1.sort(key=lambda u: u['startLine'])
+    new_units2.sort(key=lambda u: u['startLine'])
+    
+    print(f"对称拆分完成: units1={len(new_units1)}, units2={len(new_units2)}")
+    return new_units1, new_units2
+
+
+def force_split_unit(unit: Dict, splitter, lang: str) -> List[Dict]:
+    """
+    强制拆分一个单元（即使它没有超过 max_chars）
+    
+    策略：重新解析该单元的代码，使用 _split_large_node 强制提取子单元
+    """
+    try:
+        code = unit['code']
+        tree = splitter.parser.parse(bytes(code, 'utf-8'))
+        root = tree.root_node
+        
+        code_bytes = bytes(code, 'utf-8')
+        lines = code.split('\n')
+        
+        # 找到主节点并强制拆分
+        for child in root.children:
+            if child.type in ['lexical_declaration', 'variable_declaration', 'function_declaration']:
+                sub_units = splitter._split_large_node(
+                    child, unit['name'], unit['type'],
+                    code_bytes, lines, max_chars=0  # 🔑 设为 0 强制拆分
+                )
+                
+                if sub_units and len(sub_units) > 0:
+                    # 修正子单元的行号（相对于原始文件）
+                    for sub in sub_units:
+                        sub['startLine'] += unit['startLine'] - 1
+                        sub['endLine'] += unit['startLine'] - 1
+                    
+                    print(f"成功强制拆分 {unit['name']} → {len(sub_units)} 个子单元")
+                    return sub_units
+        
+        print(f"无法拆分 {unit['name']}，返回原单元")
+        return [unit]
+    except Exception as e:
+        print(f"强制拆分失败: {e}")
+        return [unit]
 
 
 def get_ast_similarity_interpretation(similarity: float) -> str:
